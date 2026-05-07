@@ -9,12 +9,43 @@ COPY --from=golang /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH
 ENV GOPATH=/go
 ENV GOROOT=/usr/local/go
-RUN apt-get update && apt-get install -y zip ca-certificates curl xz-utils && rm -rf /var/lib/apt/lists/*
+# Install build tools and SDL2_gfx dev package (for headers and amd64 .so symbol list).
+# SDL2_gfx is not in the LoveRetro tg5040/my355 sysroots; we install the Ubuntu
+# amd64 package here only to:
+#   1. copy its arch-independent C headers into the sysroot, and
+#   2. extract its exported symbol list to compile an aarch64 stub .so.
+# The real libSDL2_gfx lives on the device and is resolved at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    zip ca-certificates curl xz-utils \
+    libsdl2-gfx-dev libsdl2-gfx-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 # tg5040 ships libSDL2_ttf but no SDL2_ttf.pc; create a minimal one so CGo can
 # find it via pkg-config (tg5050 and my355 already include SDL2_ttf.pc).
 RUN PCDIR="$SYSROOT/usr/lib/pkgconfig" && \
     if [ ! -f "$PCDIR/SDL2_ttf.pc" ] && [ -f "$SYSROOT/usr/lib/libSDL2_ttf.so" ]; then \
         printf 'prefix=/usr\nexec_prefix=/usr\nlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\n\nName: SDL2_ttf\nDescription: TrueType Font library for SDL2\nVersion: 2.0.10\nRequires: sdl2 >= 2.0.0\nLibs: -L${libdir} -lSDL2_ttf\nCflags: -I${includedir}/SDL2\n' \
         > "$PCDIR/SDL2_ttf.pc"; \
+    fi
+# tg5040 and my355 sysroots have no SDL2_gfx at all; tg5050 already has it.
+# Steps:
+#   1. Copy headers from the installed amd64 package into the sysroot.
+#   2. Generate stub implementations from the amd64 .so symbol table.
+#   3. Cross-compile a stub aarch64 .so — satisfies the cross-linker; real
+#      SDL2_gfx on the device handles runtime resolution.
+RUN set -e; \
+    PCDIR="$SYSROOT/usr/lib/pkgconfig"; LIBDIR="$SYSROOT/usr/lib"; \
+    INCDIR="$SYSROOT/usr/include/SDL2"; \
+    if [ ! -f "$PCDIR/SDL2_gfx.pc" ]; then \
+        mkdir -p "$INCDIR"; \
+        for h in SDL2_gfxPrimitives.h SDL2_gfxPrimitives_font.h SDL2_framerate.h SDL2_imageFilter.h SDL2_rotozoom.h; do \
+            [ -f "/usr/include/SDL2/$h" ] && cp "/usr/include/SDL2/$h" "$INCDIR/$h"; \
+        done; \
+        GFX_LIB="$(find /usr/lib -name 'libSDL2_gfx*.so*' ! -type l 2>/dev/null | head -1)"; \
+        nm -D "$GFX_LIB" | awk '/ [TW] [A-Za-z]/{print "void "$3"(){}"}' \
+            | sort -u > /tmp/SDL2_gfx_stub.c; \
+        $CC -shared -fPIC -o "$LIBDIR/libSDL2_gfx.so" /tmp/SDL2_gfx_stub.c; \
+        rm /tmp/SDL2_gfx_stub.c; \
+        printf 'prefix=/usr\nexec_prefix=/usr\nlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\n\nName: SDL2_gfx\nDescription: SDL2 Graphics Primitives\nVersion: 1.0.4\nRequires: sdl2 >= 2.0.0\nLibs: -L${libdir} -lSDL2_gfx\nCflags: -I${includedir} -I${includedir}/SDL2\n' \
+        > "$PCDIR/SDL2_gfx.pc"; \
     fi
 WORKDIR /workspace

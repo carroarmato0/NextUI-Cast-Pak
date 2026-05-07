@@ -70,21 +70,40 @@ func (c *Controller) HandleCommand(cmd ipc.Command) {
 		c.setState(ipc.StateIdle, "", "")
 	case ipc.CmdRefreshDevices:
 		go func() {
+			c.mu.RLock()
+			prevState := c.state
+			prevDevice := c.deviceName
+			prevErr := c.errMsg
+			c.mu.RUnlock()
+			c.setState(ipc.StateScanning, "", "")
 			c.scanner.Scan()
+			// Only restore if still in scanning state (not interrupted by start/stop)
+			c.mu.RLock()
+			curState := c.state
+			c.mu.RUnlock()
+			if curState == ipc.StateScanning {
+				c.setState(prevState, prevDevice, prevErr)
+			}
 			c.pushDevices()
 		}()
 	case ipc.CmdGetStatus:
 		c.pushCurrentState()
 	case ipc.CmdSetQuality:
+		c.mu.Lock()
 		c.cfg.Quality = cmd.Quality
-		config.Save(c.cfgPath, *c.cfg)
+		cfgSnap := *c.cfg
+		c.mu.Unlock()
+		config.Save(c.cfgPath, cfgSnap)
 		if c.State() == ipc.StateStreaming {
 			c.restartFFmpeg()
 		}
 	case ipc.CmdSetAudio:
 		if cmd.Audio != nil {
+			c.mu.Lock()
 			c.cfg.Audio = *cmd.Audio
-			config.Save(c.cfgPath, *c.cfg)
+			cfgSnap := *c.cfg
+			c.mu.Unlock()
+			config.Save(c.cfgPath, cfgSnap)
 			if c.State() == ipc.StateStreaming {
 				c.restartFFmpeg()
 			}
@@ -136,9 +155,12 @@ func (c *Controller) startPipeline(addr, name string) {
 		return
 	}
 
+	c.mu.Lock()
 	c.cfg.DeviceAddr = addr
 	c.cfg.DeviceName = name
-	config.Save(c.cfgPath, *c.cfg)
+	cfgSnap := *c.cfg
+	c.mu.Unlock()
+	config.Save(c.cfgPath, cfgSnap)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()
@@ -209,10 +231,20 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string) {
 		c.mu.Lock()
 		c.hlsSrv = hlsSrv
 		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			hlsSrv.Stop()
+			return
+		default:
+		}
 
 		// Probe ALSA and build ffmpeg args
+		c.mu.RLock()
+		audioEnabled := c.cfg.Audio
+		quality := c.cfg.Quality
+		c.mu.RUnlock()
 		alsaDev := ""
-		if c.cfg.Audio {
+		if audioEnabled {
 			alsaDev = stream.ProbeALSA(nil)
 			if alsaDev == "" {
 				logger.Warn("controller: no ALSA device, proceeding video-only")
@@ -222,8 +254,8 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string) {
 		// Read physical display resolution from fb modes (not virtual_size which is multi-buffer).
 		res := stream.ReadNativeResolution("/sys/class/graphics/fb0/modes")
 		ffArgs := stream.BuildArgs(stream.FFmpegConfig{
-			Quality:    c.cfg.Quality,
-			Audio:      c.cfg.Audio && alsaDev != "",
+			Quality:    quality,
+			Audio:      audioEnabled && alsaDev != "",
 			ALSADevice: alsaDev,
 			Resolution: res,
 			HLSDir:     hlsDir,
@@ -244,6 +276,13 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string) {
 		c.mu.Lock()
 		c.ffProc = ffProc
 		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			ffProc.Stop()
+			hlsSrv.Stop()
+			return
+		default:
+		}
 
 		// Wait briefly for HLS to produce first segments
 		select {

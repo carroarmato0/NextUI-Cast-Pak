@@ -59,8 +59,12 @@ func TestBuildArgs_MediumWithAudio(t *testing.T) {
 	if !strings.Contains(joined, "-framerate 15") {
 		t.Error("medium should be 15 fps")
 	}
-	if strings.Contains(joined, "scale=") {
-		t.Error("medium at native res should not scale")
+	// medium now scales to 640x480 to reduce ARM encoding cost
+	if !strings.Contains(joined, "scale=640:480") {
+		t.Error("medium should scale to 640x480")
+	}
+	if !strings.Contains(joined, "yuv420p") {
+		t.Error("medium should force yuv420p pixel format")
 	}
 }
 
@@ -75,13 +79,34 @@ func TestBuildArgs_HighPreset(t *testing.T) {
 	args := stream.BuildArgs(cfg)
 	joined := strings.Join(args, " ")
 
-	if !strings.Contains(joined, "-framerate 20") {
-		t.Error("high should be 20 fps")
+	if !strings.Contains(joined, "-framerate 15") {
+		t.Error("high should be 15 fps")
 	}
 	if !strings.Contains(joined, "crf 23") {
 		t.Error("high CRF should be 23")
 	}
 	if !strings.Contains(joined, "192k") {
 		t.Error("high audio should be 192k")
+	}
+	// high runs at native resolution — no scale filter, but still yuv420p
+	if strings.Contains(joined, "scale=") {
+		t.Error("high preset should not scale (native resolution)")
+	}
+	if !strings.Contains(joined, "yuv420p") {
+		t.Error("high should force yuv420p pixel format")
+	}
+}
+
+func TestBuildArgs_KeyframeInterval(t *testing.T) {
+	cfg := stream.FFmpegConfig{
+		Quality: "medium",
+		HLSDir:  "/tmp/cast/hls",
+	}
+	args := stream.BuildArgs(cfg)
+	joined := strings.Join(args, " ")
+
+	// -g must equal fps so each HLS 1s segment contains a keyframe
+	if !strings.Contains(joined, "-g 15") {
+		t.Errorf("medium should set -g 15 (keyframe per second) in: %s", joined)
 	}
 }

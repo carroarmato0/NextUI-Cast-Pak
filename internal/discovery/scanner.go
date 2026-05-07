@@ -40,6 +40,9 @@ func NewRealScanner() *Scanner {
 				if ip == nil {
 					ip = entry.AddrV4
 				}
+				if ip == nil {
+					continue // no usable IPv4 address
+				}
 
 				name := friendlyNameFromInfoFields(entry.InfoFields)
 				if name == "" {

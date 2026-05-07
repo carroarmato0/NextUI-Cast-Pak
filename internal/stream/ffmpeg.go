@@ -15,8 +15,8 @@ type preset struct {
 
 var presets = map[string]preset{
 	"low":    {640, 480, 10, 35, 64},
-	"medium": {0, 0, 15, 28, 128},
-	"high":   {0, 0, 20, 23, 192},
+	"medium": {640, 480, 15, 28, 128}, // scale down to reduce ARM encoding cost
+	"high":   {0, 0, 15, 23, 192},     // native resolution
 }
 
 type FFmpegConfig struct {
@@ -43,13 +43,26 @@ func BuildArgs(cfg FFmpegConfig) []string {
 		args = append(args, "-f", "alsa", "-i", cfg.ALSADevice)
 	}
 
-	// Video encoding
-	args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-		"-crf", fmt.Sprintf("%d", p.crf))
+	// Video encoding.
+	// -g <fps>: force a keyframe at every second so HLS segments actually close
+	//   at the -hls_time boundary. Without this libx264 uses keyint=250 (16s
+	//   at 15fps) and the first segment doesn't appear for ~10 seconds.
+	// yuv420p: the fbdev BGRA source defaults to High 4:4:4 Predictive profile
+	//   (yuv444p) which is CPU-intensive and not universally supported by
+	//   Chromecasts. Force the standard 4:2:0 chroma subsampling instead.
+	args = append(args,
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-tune", "zerolatency",
+		"-crf", fmt.Sprintf("%d", p.crf),
+		"-g", fmt.Sprintf("%d", p.fps),
+	)
 
-	// Scale filter (only if preset has explicit dimensions)
+	// Scale + pixel-format filter
 	if p.width > 0 && p.height > 0 {
-		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d", p.width, p.height))
+		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d,format=yuv420p", p.width, p.height))
+	} else {
+		args = append(args, "-vf", "format=yuv420p")
 	}
 
 	// Audio encoding

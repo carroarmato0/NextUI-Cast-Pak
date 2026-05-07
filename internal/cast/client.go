@@ -71,7 +71,8 @@ func NewSession(client CastClient) *Session {
 // On load failure the connection is closed before returning the error.
 func (s *Session) Start(addr, mediaURL string) error {
 	if err := s.client.Connect(addr); err != nil {
-		s.client.Close()
+		// Do NOT call Close() here: go-chromecast's Application.Close panics when
+		// the underlying TLS connection was never established.
 		return err
 	}
 	if err := s.client.Load(mediaURL, "application/x-mpegURL"); err != nil {

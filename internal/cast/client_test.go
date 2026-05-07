@@ -27,8 +27,10 @@ func TestCastSession_ConnectFails(t *testing.T) {
 	if err == nil {
 		t.Error("expected error on connect failure")
 	}
-	if !fake.closed {
-		t.Error("connect failure should call Close()")
+	// Close must NOT be called when Connect fails: go-chromecast panics when
+	// Close is called on a connection that was never established.
+	if fake.closed {
+		t.Error("connect failure must not call Close()")
 	}
 }
 

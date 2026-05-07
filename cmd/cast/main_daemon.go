@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -65,14 +66,19 @@ func runDaemon() {
 		os.Exit(1)
 	}
 
-	// Auto-connect to last device if configured
+	// Auto-connect to last device if the saved address looks valid.
 	if cfg.DeviceAddr != "" {
-		logger.Info("daemon: auto-connecting to %s (%s)", cfg.DeviceName, cfg.DeviceAddr)
-		ctrl.HandleCommand(ipc.Command{
-			Cmd:        ipc.CmdStart,
-			DeviceAddr: cfg.DeviceAddr,
-			DeviceName: cfg.DeviceName,
-		})
+		host, _, err := net.SplitHostPort(cfg.DeviceAddr)
+		if err != nil || host == "" || host == "<nil>" {
+			logger.Warn("daemon: ignoring invalid saved device addr %q", cfg.DeviceAddr)
+		} else {
+			logger.Info("daemon: auto-connecting to %s (%s)", cfg.DeviceName, cfg.DeviceAddr)
+			ctrl.HandleCommand(ipc.Command{
+				Cmd:        ipc.CmdStart,
+				DeviceAddr: cfg.DeviceAddr,
+				DeviceName: cfg.DeviceName,
+			})
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

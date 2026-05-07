@@ -18,8 +18,10 @@ func TestServer_AcceptsCommand(t *testing.T) {
 	sockPath := filepath.Join(dir, "test.sock")
 
 	var got ipc.Command
+	done := make(chan struct{})
 	srv := ipc.NewServer(sockPath, func(cmd ipc.Command) {
 		got = cmd
+		close(done)
 	})
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -32,9 +34,12 @@ func TestServer_AcceptsCommand(t *testing.T) {
 	}
 	defer conn.Close()
 
-	cmd := ipc.Command{Cmd: ipc.CmdGetStatus}
-	json.NewEncoder(conn).Encode(cmd)
-	time.Sleep(50 * time.Millisecond)
+	json.NewEncoder(conn).Encode(ipc.Command{Cmd: ipc.CmdGetStatus})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for command")
+	}
 
 	if got.Cmd != ipc.CmdGetStatus {
 		t.Errorf("got cmd %q, want %q", got.Cmd, ipc.CmdGetStatus)
@@ -51,7 +56,10 @@ func TestServer_BroadcastEvent(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	conn, _ := net.Dial("unix", sockPath)
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
 	defer conn.Close()
 	time.Sleep(20 * time.Millisecond)
 

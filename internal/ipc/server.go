@@ -16,9 +16,10 @@ type Server struct {
 	onCommand func(Command)
 	listener  net.Listener
 
-	mu      sync.Mutex
-	clients map[net.Conn]struct{}
-	done    chan struct{}
+	mu       sync.Mutex
+	clients  map[net.Conn]struct{}
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 func NewServer(sockPath string, onCommand func(Command)) *Server {
@@ -32,6 +33,7 @@ func NewServer(sockPath string, onCommand func(Command)) *Server {
 
 func (s *Server) SetPidFile(path string) { s.pidFile = path }
 
+// Start begins accepting connections. A Server may only be started once.
 func (s *Server) Start() error {
 	_ = os.Remove(s.path)
 	ln, err := net.Listen("unix", s.path)
@@ -48,7 +50,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Stop() {
-	close(s.done)
+	s.stopOnce.Do(func() { close(s.done) })
 	if s.listener != nil {
 		s.listener.Close()
 	}
@@ -59,11 +61,18 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) Broadcast(ev Event) {
-	data, _ := json.Marshal(ev)
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
 	data = append(data, '\n')
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	conns := make([]net.Conn, 0, len(s.clients))
 	for c := range s.clients {
+		conns = append(conns, c)
+	}
+	s.mu.Unlock()
+	for _, c := range conns {
 		c.Write(data)
 	}
 }

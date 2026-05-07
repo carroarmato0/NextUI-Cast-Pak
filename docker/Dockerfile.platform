@@ -1,27 +1,20 @@
+# Platform cross-compilation image.
+# Layers Go on top of the LoveRetro platform toolchain so that CGo builds pick
+# up the device-native SDL2 from the toolchain sysroot.
+# Supported PLATFORM values: tg5040, tg5050, my355.
 ARG PLATFORM=tg5040
-FROM docker.io/loveretro/toolchain-${PLATFORM}:latest AS toolchain
-
-FROM docker.io/golang:1.22-bookworm
-
-ARG PLATFORM=tg5040
-ENV PLATFORM=${PLATFORM}
-
-COPY --from=toolchain /sysroot /sysroot
-COPY --from=toolchain /toolchain /toolchain
-
-ENV PATH="/toolchain/bin:$PATH"
-ENV SYSROOT=/sysroot
-ENV PKG_CONFIG_PATH="${SYSROOT}/usr/lib/pkgconfig"
-ENV CC="aarch64-linux-gnu-gcc"
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc-aarch64-linux-gnu pkg-config curl xz-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-# Download static ffmpeg for ARM64
-RUN FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" && \
-    curl -fsSL "$FFMPEG_URL" | tar -xJ --strip-components=1 -C /usr/local/bin/ \
-    --wildcards '*/ffmpeg' && \
-    chmod +x /usr/local/bin/ffmpeg
-
+FROM docker.io/golang:1.22-alpine AS golang
+FROM ghcr.io/loveretro/${PLATFORM}-toolchain:latest
+COPY --from=golang /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH
+ENV GOPATH=/go
+ENV GOROOT=/usr/local/go
+RUN apt-get update && apt-get install -y zip ca-certificates curl xz-utils && rm -rf /var/lib/apt/lists/*
+# tg5040 ships libSDL2_ttf but no SDL2_ttf.pc; create a minimal one so CGo
+# can find it via pkg-config (tg5050 and my355 already include SDL2_ttf.pc).
+RUN PCDIR="$SYSROOT/usr/lib/pkgconfig" && \
+    if [ ! -f "$PCDIR/SDL2_ttf.pc" ] && [ -f "$SYSROOT/usr/lib/libSDL2_ttf.so" ]; then \
+        printf 'prefix=/usr\nexec_prefix=/usr\nlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\n\nName: SDL2_ttf\nDescription: TrueType Font library for SDL2\nVersion: 2.0.10\nRequires: sdl2 >= 2.0.0\nLibs: -L${libdir} -lSDL2_ttf\nCflags: -I${includedir}/SDL2\n' \
+        > "$PCDIR/SDL2_ttf.pc"; \
+    fi
 WORKDIR /workspace

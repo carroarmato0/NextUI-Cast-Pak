@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
@@ -12,52 +13,77 @@ detect_runtime() {
     else echo ""; fi
 }
 
+RUNTIME_OVERRIDE=""
 TARGET=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)
             cat <<'EOF'
-Usage: build.sh <target>
+Usage: build.sh [--runtime docker|podman] <target>
 
 Targets:
-  native        Build for the host machine (runs inside dev container)
+  native        Build for the host machine (x86_64, runs inside dev container)
   tg5040        Cross-compile for TrimUI Brick / Smart Pro (ARM64)
   tg5050        Cross-compile for TrimUI Smart Pro S (ARM64)
   my355         Cross-compile for Miyoo Flip (ARM64)
-  all           Cross-compile for all three device platforms
+  all           Cross-compile for all three device platforms sequentially
+
+Options:
+  --runtime docker|podman   Override container runtime (default: auto-detect, prefers podman)
 
 Environment:
-  CONTAINER_RUNTIME=docker|podman   Override container runtime (default: auto-detect)
+  CONTAINER_RUNTIME=docker|podman   Alternative to --runtime
+
+Output: bin/<target>/cast
+
+Examples:
+  ./scripts/build.sh tg5040
+  ./scripts/build.sh all
+  ./scripts/build.sh --runtime docker tg5050
+  CONTAINER_RUNTIME=docker ./scripts/build.sh native
 EOF
             exit 0
             ;;
+        --runtime) RUNTIME_OVERRIDE="$2"; shift 2 ;;
         *) TARGET="$1"; shift ;;
     esac
 done
 
-[ -z "$TARGET" ] && echo "Usage: build.sh native|tg5040|tg5050|my355|all" >&2 && exit 1
+if [ -z "$TARGET" ]; then
+    echo "Usage: build.sh [--runtime docker|podman] native|tg5040|tg5050|my355|all" >&2
+    echo "       build.sh --help for full usage" >&2
+    exit 1
+fi
 
+# Only need a container runtime when launching from the host.
 RUNTIME=""
 GIT_COMMIT="${GIT_COMMIT:-}"
 CACHE_DIR="$(pwd)/.go_cache"
 if [ -z "${IN_CONTAINER:-}" ]; then
     mkdir -p "$CACHE_DIR"
-    RUNTIME="${CONTAINER_RUNTIME:-$(detect_runtime)}"
-    [ -z "$RUNTIME" ] && echo "ERROR: docker or podman required" >&2 && exit 1
+    RUNTIME="${RUNTIME_OVERRIDE:-$(detect_runtime)}"
+    if [ -z "$RUNTIME" ]; then
+        echo "ERROR: docker or podman required" >&2; exit 1
+    fi
 
+    # Extract git commit info on the host.
     GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    if [ "$GIT_COMMIT" != "unknown" ] && ! git diff --quiet 2>/dev/null; then
-        GIT_COMMIT="${GIT_COMMIT}-dirty"
+    if [ "$GIT_COMMIT" != "unknown" ]; then
+        if ! git diff --quiet 2>/dev/null; then
+            GIT_COMMIT="${GIT_COMMIT}-dirty"
+        fi
     fi
 fi
 
 DEV_IMAGE="cast-pak-dev"
 
+# Ensure the dev image exists (used for native builds and tests).
 ensure_dev_image() {
     $RUNTIME image inspect "$DEV_IMAGE" >/dev/null 2>&1 || \
         $RUNTIME build -t "$DEV_IMAGE" -f docker/Dockerfile.dev .
 }
 
+# Ensure the per-platform image exists (LoveRetro toolchain + Go).
 ensure_platform_image() {
     PLATFORM="$1"
     TAG="cast-pak-$PLATFORM-dev"
@@ -92,24 +118,27 @@ build_native() {
 
 build_platform() {
     PLATFORM="$1"
+
     mkdir -p bin/"$PLATFORM" lib/"$PLATFORM" assets
 
-    # Copy CA bundle so SSL_CERT_FILE works on devices without a system cert store.
+    # Copy CA bundle into assets/ so SSL_CERT_FILE works on devices without a
+    # system certificate store.
     cp /etc/ssl/certs/ca-certificates.crt assets/ca-certificates.crt 2>/dev/null || true
 
+    # CC, PKG_CONFIG_PATH, and SYSROOT are set by the LoveRetro toolchain image.
+    # -a:        force recompile; cached .a files from a different toolchain/image
+    #            can embed GLIBC symbol versions that the device's libc lacks.
+    # -tags netgo: use Go's built-in DNS resolver to avoid linking res_search
+    #            which requires GLIBC_2.34 (devices ship glibc 2.33).
     VERSION="$(pak_version)"
     COMMIT="${GIT_COMMIT:-unknown}"
-    # CC, PKG_CONFIG_PATH, and SYSROOT are set by the LoveRetro toolchain image.
-    # -a: force recompile; cached objects from a different toolchain can embed
-    #     GLIBC symbols the device's libc lacks.
-    # -tags netgo: use Go's built-in DNS resolver, avoiding GLIBC_2.34 deps.
     CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
         go build -a -tags netgo -buildvcs=false \
         -ldflags "-X 'main.version=$VERSION' -X 'main.gitCommit=$COMMIT'" \
         -o bin/"$PLATFORM"/cast ./cmd/cast/
     echo "Built: bin/$PLATFORM/cast ($VERSION / $COMMIT)"
 
-    # Download static ffmpeg for ARM64.
+    # Download static ffmpeg for ARM64 if not already present.
     if [ ! -f bin/"$PLATFORM"/ffmpeg ]; then
         FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
         curl -fsSL "$FFMPEG_URL" | tar -xJ --strip-components=1 -C bin/"$PLATFORM"/ \
@@ -117,15 +146,15 @@ build_platform() {
         chmod +x bin/"$PLATFORM"/ffmpeg
     fi
 
-    # Bundle SDL2 libs from the LoveRetro sysroot.
+    # Bundle SDL2 .so files from the LoveRetro sysroot.  These are compiled
+    # without X11 / PulseAudio / Wayland so they work on embedded devices.
+    # Copy only the real versioned file under the SONAME name so the zip ships
+    # a single file per library rather than a symlink + versioned duplicate.
     rm -f lib/"$PLATFORM"/libSDL2*.so*
     SDL2_SO=$(ls "$SYSROOT/usr/lib"/libSDL2-2.0.so.0.* 2>/dev/null | grep -v '\.so$' | head -1)
     SDL2_TTF_SO=$(ls "$SYSROOT/usr/lib"/libSDL2_ttf-2.0.so.0.* 2>/dev/null | grep -v '\.so$' | head -1)
-    SDL2_GFX_SO=$(ls "$SYSROOT/usr/lib"/libSDL2_gfx.so.*.*.* 2>/dev/null | head -1)
-    [ -z "$SDL2_GFX_SO" ] && SDL2_GFX_SO="$SYSROOT/usr/lib/libSDL2_gfx.so.1.0.4"
     [ -n "$SDL2_SO" ]     && cp "$SDL2_SO"     lib/"$PLATFORM"/libSDL2-2.0.so.0
     [ -n "$SDL2_TTF_SO" ] && cp "$SDL2_TTF_SO" lib/"$PLATFORM"/libSDL2_ttf-2.0.so.0
-    [ -f "$SDL2_GFX_SO" ] && cp "$SDL2_GFX_SO" lib/"$PLATFORM"/libSDL2_gfx.so
 }
 
 case "$TARGET" in
@@ -151,14 +180,73 @@ case "$TARGET" in
             echo "ERROR: 'build.sh all' must be run from the host, not inside a container." >&2
             exit 1
         fi
+
+        # Ensure images exist first (sequentially to avoid race conditions and noise).
         for p in tg5040 tg5050 my355; do
             ensure_platform_image "$p"
         done
-        for p in tg5040 tg5050 my355; do
-            "$0" "$p" &
+
+        run_build() {
+            local p="$1"
+            local log="bin/$p/build.log"
+            mkdir -p "bin/$p"
+            if "$0" "$p" > "$log" 2>&1; then
+                grep "Built:" "$log"
+                return 0
+            else
+                return 1
+            fi
+        }
+
+        echo "==> Building all platforms in parallel..."
+        platforms="tg5040 tg5050 my355"
+        for p in $platforms; do
+            run_build "$p" &
+            eval "pid_$p=\$!"
         done
-        wait
+
+        # Spinner loop (only if TTY)
+        if [ -t 1 ]; then
+            spinner="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+            i=0
+            while :; do
+                running=0
+                current_building=""
+                for p in $platforms; do
+                    pid_var="pid_$p"
+                    pid=$(eval "echo \$$pid_var")
+                    if kill -0 $pid 2>/dev/null; then
+                        running=1
+                        current_building="$current_building $p"
+                    fi
+                done
+                [ $running -eq 0 ] && break
+                printf "\r  %s Building [%s]..." "${spinner:i++%${#spinner}:1}" "${current_building# }"
+                sleep 0.1
+            done
+            printf "\r\033[K"
+        fi
+
+        # Collect results.
+        failed=""
+        for p in $platforms; do
+            pid_var="pid_$p"
+            pid=$(eval "echo \$$pid_var")
+            if ! wait $pid; then
+                failed="$failed $p"
+            fi
+        done
+
+        if [ -n "$failed" ]; then
+            echo "ERROR: Build failed for platforms:$failed" >&2
+            for p in $failed; do
+                echo "--- Log for $p ---" >&2
+                cat "bin/$p/build.log" >&2
+            done
+            exit 1
+        fi
         ;;
+
     *)
         echo "Unknown target: $TARGET" >&2; exit 1
         ;;

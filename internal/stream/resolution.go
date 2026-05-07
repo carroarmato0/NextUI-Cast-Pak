@@ -14,7 +14,7 @@ func ReadNativeResolution(sysPath string) image.Point {
 	}
 	s := strings.TrimSpace(string(data))
 	var w, h int
-	if _, err := fmt.Sscanf(s, "%d,%d", &w, &h); err != nil || w <= 0 || h <= 0 {
+	if _, err := fmt.Sscanf(s, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 		return image.Point{X: 1280, Y: 720}
 	}
 	return image.Point{X: w, Y: h}

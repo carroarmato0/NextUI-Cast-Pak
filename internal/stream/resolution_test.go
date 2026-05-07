@@ -13,10 +13,22 @@ import (
 func TestReadNative_ParsesFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "virtual_size")
-	os.WriteFile(p, []byte("1280,720\n"), 0644)
+	os.WriteFile(p, []byte("1280x720\n"), 0644)
 
 	got := stream.ReadNativeResolution(p)
 	want := image.Point{X: 1280, Y: 720}
+	if got != want {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestReadNative_ParsesNonDefaultResolution(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "virtual_size")
+	os.WriteFile(p, []byte("1024x768\n"), 0644)
+
+	got := stream.ReadNativeResolution(p)
+	want := image.Point{X: 1024, Y: 768}
 	if got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}

@@ -76,21 +76,30 @@ type Process struct {
 }
 
 func (p *Process) Start(hlsDir string, args []string) error {
+	// Stop any previously running process before starting a new one.
+	p.Stop()
+	if err := os.MkdirAll(hlsDir, 0755); err != nil {
+		return fmt.Errorf("create HLS dir: %w", err)
+	}
+	cmd := exec.Command("ffmpeg", append([]string{"-y"}, args...)...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	_ = os.MkdirAll(hlsDir, 0755)
-	p.cmd = exec.Command("ffmpeg", append([]string{"-y"}, args...)...)
-	p.cmd.Stderr = os.Stderr
-	return p.cmd.Start()
+	p.cmd = cmd
+	p.mu.Unlock()
+	return nil
 }
 
 func (p *Process) Stop() {
 	p.mu.Lock()
 	cmd := p.cmd
+	p.cmd = nil // nil out so Wait() sees no process and returns nil
 	p.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Kill()
-		cmd.Wait()
+		cmd.Wait() // reap; ignore error (process may have already exited)
 	}
 }
 

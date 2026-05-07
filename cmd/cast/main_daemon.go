@@ -40,8 +40,13 @@ func runDaemon() {
 	}
 
 	scanner := discovery.NewRealScanner()
-	go scanner.Scan() //nolint:errcheck
+	go func() {
+		if err := scanner.Scan(); err != nil {
+			logger.Warn("daemon: initial scan: %v", err)
+		}
+	}()
 
+	// ctrl is assigned before srv.Start() so the closure always sees a non-nil value.
 	var ctrl *cast.Controller
 	srv := ipc.NewServer(sockPath, func(cmd ipc.Command) {
 		ctrl.HandleCommand(cmd)
@@ -79,7 +84,9 @@ func runDaemon() {
 		for {
 			select {
 			case <-ticker.C:
-				scanner.Scan() //nolint:errcheck
+				if err := scanner.Scan(); err != nil {
+					logger.Warn("daemon: periodic scan: %v", err)
+				}
 				ctrl.HandleCommand(ipc.Command{Cmd: ipc.CmdGetStatus})
 			case <-ctx.Done():
 				return

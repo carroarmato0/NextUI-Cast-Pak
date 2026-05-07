@@ -25,4 +25,12 @@ if [ -f bin/"$PLATFORM"/ffmpeg ]; then
     adb shell chmod +x "$REMOTE_PATH/bin/$PLATFORM/ffmpeg"
 fi
 
-echo "Deployed to $REMOTE_PATH"
+# Kill running daemon so the next launch picks up the new binary.
+adb shell '
+  PID_FILE=/tmp/cast/daemon.pid
+  if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    kill "$(cat "$PID_FILE")" && echo "daemon stopped"
+  fi
+'
+
+echo "Deployed to $REMOTE_PATH (relaunch Cast from the device to start new daemon)"

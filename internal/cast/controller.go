@@ -120,21 +120,23 @@ func (c *Controller) HandleCommand(cmd ipc.Command) {
 		c.pushCurrentState()
 	case ipc.CmdSetQuality:
 		c.mu.Lock()
+		changed := c.cfg.Quality != cmd.Quality
 		c.cfg.Quality = cmd.Quality
 		cfgSnap := *c.cfg
 		c.mu.Unlock()
 		config.Save(c.cfgPath, cfgSnap)
-		if c.State() == ipc.StateStreaming {
+		if changed && c.State() == ipc.StateStreaming {
 			c.restartFFmpeg()
 		}
 	case ipc.CmdSetAudio:
 		if cmd.Audio != nil {
 			c.mu.Lock()
+			changed := c.cfg.Audio != *cmd.Audio
 			c.cfg.Audio = *cmd.Audio
 			cfgSnap := *c.cfg
 			c.mu.Unlock()
 			config.Save(c.cfgPath, cfgSnap)
-			if c.State() == ipc.StateStreaming {
+			if changed && c.State() == ipc.StateStreaming {
 				c.restartFFmpeg()
 			}
 		}

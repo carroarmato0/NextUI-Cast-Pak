@@ -71,6 +71,7 @@ func NewSession(client CastClient) *Session {
 // On load failure the connection is closed before returning the error.
 func (s *Session) Start(addr, mediaURL string) error {
 	if err := s.client.Connect(addr); err != nil {
+		s.client.Close()
 		return err
 	}
 	if err := s.client.Load(mediaURL, "application/x-mpegURL"); err != nil {

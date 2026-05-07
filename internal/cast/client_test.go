@@ -12,12 +12,13 @@ type fakeClient struct {
 	connectErr error
 	loadErr    error
 	stopped    bool
+	closed     bool
 }
 
-func (f *fakeClient) Connect(addr string) error { return f.connectErr }
+func (f *fakeClient) Connect(addr string) error        { return f.connectErr }
 func (f *fakeClient) Load(url, contentType string) error { return f.loadErr }
-func (f *fakeClient) Stop() error { f.stopped = true; return nil }
-func (f *fakeClient) Close() {}
+func (f *fakeClient) Stop() error                      { f.stopped = true; return nil }
+func (f *fakeClient) Close()                           { f.closed = true }
 
 func TestCastSession_ConnectFails(t *testing.T) {
 	fake := &fakeClient{connectErr: errors.New("refused")}
@@ -25,6 +26,9 @@ func TestCastSession_ConnectFails(t *testing.T) {
 	err := sess.Start("192.168.1.5:8009", "http://device/stream.m3u8")
 	if err == nil {
 		t.Error("expected error on connect failure")
+	}
+	if !fake.closed {
+		t.Error("connect failure should call Close()")
 	}
 }
 
@@ -35,6 +39,9 @@ func TestCastSession_LoadFails(t *testing.T) {
 	if err == nil {
 		t.Error("expected error on load failure")
 	}
+	if !fake.closed {
+		t.Error("load failure should call Close()")
+	}
 }
 
 func TestCastSession_StopCallsClient(t *testing.T) {
@@ -44,5 +51,8 @@ func TestCastSession_StopCallsClient(t *testing.T) {
 	sess.Stop()
 	if !fake.stopped {
 		t.Error("Stop should call client.Stop()")
+	}
+	if !fake.closed {
+		t.Error("Stop should call client.Close()")
 	}
 }

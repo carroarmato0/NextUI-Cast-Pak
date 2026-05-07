@@ -29,22 +29,26 @@ RUN PCDIR="$SYSROOT/usr/lib/pkgconfig" && \
 # tg5040 and my355 sysroots have no SDL2_gfx at all; tg5050 already has it.
 # Steps:
 #   1. Copy headers from the installed amd64 package into the sysroot.
-#   2. Generate stub implementations from the amd64 .so symbol table.
-#   3. Cross-compile a stub aarch64 .so — satisfies the cross-linker; real
-#      SDL2_gfx on the device handles runtime resolution.
+#   2. Download SDL2_gfx 1.0.4 source and cross-compile a real aarch64 .so.
+#      The binary links SDL2 functions at runtime via LD_LIBRARY_PATH.
 RUN set -e; \
     PCDIR="$SYSROOT/usr/lib/pkgconfig"; LIBDIR="$SYSROOT/usr/lib"; \
     INCDIR="$SYSROOT/usr/include/SDL2"; \
     if [ ! -f "$PCDIR/SDL2_gfx.pc" ]; then \
-        mkdir -p "$INCDIR"; \
+        mkdir -p "$INCDIR" /tmp/sdl2gfx-src; \
         for h in SDL2_gfxPrimitives.h SDL2_gfxPrimitives_font.h SDL2_framerate.h SDL2_imageFilter.h SDL2_rotozoom.h; do \
             [ -f "/usr/include/SDL2/$h" ] && cp "/usr/include/SDL2/$h" "$INCDIR/$h"; \
         done; \
-        GFX_LIB="$(find /usr/lib -name 'libSDL2_gfx*.so*' ! -type l 2>/dev/null | head -1)"; \
-        nm -D "$GFX_LIB" | awk '/ [TW] [A-Za-z]/{print "void "$3"(){}"}' \
-            | sort -u > /tmp/SDL2_gfx_stub.c; \
-        $CC -shared -fPIC -o "$LIBDIR/libSDL2_gfx.so" /tmp/SDL2_gfx_stub.c; \
-        rm /tmp/SDL2_gfx_stub.c; \
+        curl -fSL --retry 3 \
+            "https://downloads.sourceforge.net/project/sdl2gfx/SDL2_gfx-1.0.4.tar.gz" \
+            -o /tmp/sdl2gfx.tar.gz; \
+        tar -xzf /tmp/sdl2gfx.tar.gz -C /tmp/sdl2gfx-src --strip-components=1; \
+        cd /tmp/sdl2gfx-src; \
+        $CC -shared -fPIC -O2 \
+            -I"$SYSROOT/usr/include" -I"$SYSROOT/usr/include/SDL2" \
+            SDL2_gfxPrimitives.c SDL2_framerate.c SDL2_imageFilter.c SDL2_rotozoom.c \
+            -o "$LIBDIR/libSDL2_gfx.so"; \
+        cd /; rm -rf /tmp/sdl2gfx-src /tmp/sdl2gfx.tar.gz; \
         printf 'prefix=/usr\nexec_prefix=/usr\nlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\n\nName: SDL2_gfx\nDescription: SDL2 Graphics Primitives\nVersion: 1.0.4\nRequires: sdl2 >= 2.0.0\nLibs: -L${libdir} -lSDL2_gfx\nCflags: -I${includedir} -I${includedir}/SDL2\n' \
         > "$PCDIR/SDL2_gfx.pc"; \
     fi

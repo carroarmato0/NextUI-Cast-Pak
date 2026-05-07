@@ -21,7 +21,7 @@ var latestState atomic.Value // stores menuState
 
 // RunMainMenu runs the main menu loop until the user quits.
 func RunMainMenu(a *App) {
-	latestState.Store(menuState{state: ipc.StateIdle})
+	latestState.Store(menuState{state: ""})
 
 	// Listen for daemon state pushes
 	if a.client != nil {
@@ -84,6 +84,10 @@ func RunMainMenu(a *App) {
 
 func statusPill(ms menuState) string {
 	switch ms.state {
+	case "":
+		return "○ Service not running"
+	case ipc.StateIdle:
+		return "○ Ready"
 	case ipc.StateStreaming:
 		return "● Streaming to " + ms.deviceName
 	case ipc.StateConnecting:
@@ -93,7 +97,7 @@ func statusPill(ms menuState) string {
 	case ipc.StateError:
 		return "⚠ Error: " + ms.errMsg
 	default:
-		return "○ Service not running"
+		return "○ Ready"
 	}
 }
 

@@ -4,6 +4,7 @@ package ui
 
 import (
 	"os"
+	"time"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
 	"github.com/carroarmato0/nextui-cast-pak/internal/config"
@@ -48,9 +49,14 @@ func (a *App) Run() {
 		return
 	}
 
-	// Connect to daemon IPC
+	// Connect to daemon IPC; retry briefly since the daemon may still be starting.
 	a.client = ipc.NewClient("/tmp/cast/control.sock")
-	a.client.Connect() // best-effort; main menu handles disconnected state
+	for i := 0; i < 10; i++ {
+		if err := a.client.Connect(); err == nil {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 
 	RunMainMenu(a)
 }

@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,12 +31,24 @@ func NewRealScanner() *Scanner {
 		go func() {
 			defer close(done)
 			for entry := range ch {
+				// Filter audio-only devices: VIDEO_OUT is bit 0x01.
+				if ca, ok := capabilitiesFromInfoFields(entry.InfoFields); ok && (ca&0x01) == 0 {
+					continue
+				}
+
 				ip := entry.AddrV4.To4()
 				if ip == nil {
 					ip = entry.AddrV4
 				}
+
+				name := friendlyNameFromInfoFields(entry.InfoFields)
+				if name == "" {
+					// Strip mDNS suffix; raw name looks like "SomeName._googlecast._tcp.local."
+					name = strings.SplitN(entry.Name, ".", 2)[0]
+				}
+
 				devs = append(devs, Device{
-					Name:  entry.Name,
+					Name:  name,
 					Addr:  fmt.Sprintf("%s:%d", ip, entry.Port),
 					Model: modelFromInfoFields(entry.InfoFields),
 				})
@@ -54,6 +67,16 @@ func NewRealScanner() *Scanner {
 	})
 }
 
+// friendlyNameFromInfoFields extracts the "fn" TXT record (user-visible device name).
+func friendlyNameFromInfoFields(fields []string) string {
+	for _, f := range fields {
+		if strings.HasPrefix(f, "fn=") {
+			return strings.TrimPrefix(f, "fn=")
+		}
+	}
+	return ""
+}
+
 // modelFromInfoFields extracts the "md" value from mDNS TXT record fields.
 // Each field is expected to be in "key=value" format.
 func modelFromInfoFields(fields []string) string {
@@ -63,6 +86,20 @@ func modelFromInfoFields(fields []string) string {
 		}
 	}
 	return ""
+}
+
+// capabilitiesFromInfoFields extracts the "ca" capabilities bitmask.
+// Returns (value, true) when present, (0, false) when absent.
+func capabilitiesFromInfoFields(fields []string) (uint32, bool) {
+	for _, f := range fields {
+		if strings.HasPrefix(f, "ca=") {
+			v, err := strconv.ParseUint(strings.TrimPrefix(f, "ca="), 10, 32)
+			if err == nil {
+				return uint32(v), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (s *Scanner) Scan() error {

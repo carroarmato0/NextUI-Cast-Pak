@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"runtime/pprof"
-	"strings"
 	"syscall"
 
 	"github.com/carroarmato0/nextui-cast-pak/internal/logger"
@@ -48,8 +47,7 @@ func main() {
 		}
 	}()
 
-	startMsg := "cast " + logSuffix + " starting"
-	logger.Info("%s version=%s commit=%s", startMsg, version, gitCommit)
+	logger.Info("cast %s starting version=%s commit=%s", logSuffix, version, gitCommit)
 
 	setupProfiling(*cpuProfile, *memProfile, *pprofAddr)
 
@@ -123,6 +121,3 @@ func platformDescription(p string) string {
 		return "unknown device"
 	}
 }
-
-// suppress unused import warning in headless builds
-var _ = strings.TrimSpace

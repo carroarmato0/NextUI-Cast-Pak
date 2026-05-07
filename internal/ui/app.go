@@ -58,6 +58,24 @@ func (a *App) Run() {
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	// Register ONE unified handler for all daemon events.
+	// Per-screen handlers must not call OnEvent — each call replaces the previous
+	// callback, so a device-picker registration would silently drop state events.
+	a.client.OnEvent(func(ev ipc.Event) {
+		switch ev.Event {
+		case ipc.EventState:
+			latestState.Store(menuState{
+				state:      ev.State,
+				deviceName: ev.DeviceName,
+				errMsg:     ev.Error,
+			})
+		case ipc.EventDevices:
+			deviceCacheMu.Lock()
+			deviceCache = ev.Devices
+			deviceCacheMu.Unlock()
+		}
+	})
+
 	RunMainMenu(a)
 }
 

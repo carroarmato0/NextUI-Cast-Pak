@@ -19,15 +19,7 @@ var (
 )
 
 func RunDevicePicker(a *App) {
-	// Receive device list from daemon
 	if a.client != nil {
-		a.client.OnEvent(func(ev ipc.Event) {
-			if ev.Event == ipc.EventDevices {
-				deviceCacheMu.Lock()
-				deviceCache = ev.Devices
-				deviceCacheMu.Unlock()
-			}
-		})
 		a.client.Send(ipc.Command{Cmd: ipc.CmdGetStatus}) //nolint:errcheck
 	}
 

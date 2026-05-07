@@ -23,17 +23,7 @@ var latestState atomic.Value // stores menuState
 func RunMainMenu(a *App) {
 	latestState.Store(menuState{state: ""})
 
-	// Listen for daemon state pushes
 	if a.client != nil {
-		a.client.OnEvent(func(ev ipc.Event) {
-			if ev.Event == ipc.EventState {
-				latestState.Store(menuState{
-					state:      ev.State,
-					deviceName: ev.DeviceName,
-					errMsg:     ev.Error,
-				})
-			}
-		})
 		a.client.Send(ipc.Command{Cmd: ipc.CmdGetStatus}) //nolint:errcheck
 	}
 

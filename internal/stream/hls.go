@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 )
 
 type HLSServer struct {
@@ -36,9 +37,9 @@ func (h *HLSServer) Start() error {
 
 func (h *HLSServer) Stop() {
 	if h.srv != nil {
-		// context.Background() is intentional: on embedded hardware we prefer
-		// waiting for active clients to disconnect rather than forcefully closing.
-		h.srv.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		h.srv.Shutdown(ctx) //nolint:errcheck
 		h.srv = nil
 		h.listener = nil
 	}

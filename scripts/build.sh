@@ -121,8 +121,11 @@ build_platform() {
     rm -f lib/"$PLATFORM"/libSDL2*.so*
     SDL2_SO=$(ls "$SYSROOT/usr/lib"/libSDL2-2.0.so.0.* 2>/dev/null | grep -v '\.so$' | head -1)
     SDL2_TTF_SO=$(ls "$SYSROOT/usr/lib"/libSDL2_ttf-2.0.so.0.* 2>/dev/null | grep -v '\.so$' | head -1)
+    SDL2_GFX_SO=$(ls "$SYSROOT/usr/lib"/libSDL2_gfx.so.*.*.* 2>/dev/null | head -1)
+    [ -z "$SDL2_GFX_SO" ] && SDL2_GFX_SO="$SYSROOT/usr/lib/libSDL2_gfx.so.1.0.4"
     [ -n "$SDL2_SO" ]     && cp "$SDL2_SO"     lib/"$PLATFORM"/libSDL2-2.0.so.0
     [ -n "$SDL2_TTF_SO" ] && cp "$SDL2_TTF_SO" lib/"$PLATFORM"/libSDL2_ttf-2.0.so.0
+    [ -f "$SDL2_GFX_SO" ] && cp "$SDL2_GFX_SO" lib/"$PLATFORM"/libSDL2_gfx.so
 }
 
 case "$TARGET" in

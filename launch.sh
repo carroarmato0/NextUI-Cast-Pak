@@ -2,7 +2,10 @@
 PAK_DIR="$(dirname "$0")"
 PAK_NAME="$(basename "$PAK_DIR")"
 PAK_NAME="${PAK_NAME%.*}"
-export HOME="$SHARED_USERDATA_PATH/$PAK_NAME"
+# PLATFORM is always exported by NextUI; SHARED_USERDATA_PATH may or may not be set.
+_base="${SHARED_USERDATA_PATH:-/mnt/SDCARD/.userdata/$PLATFORM}"
+export HOME="$_base/$PAK_NAME"
+unset _base
 
 # Select bundled SDL2 libs for this device family.
 if [ -d /usr/miyoo ]; then

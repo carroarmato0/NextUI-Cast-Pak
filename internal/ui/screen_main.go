@@ -68,8 +68,12 @@ func RunMainMenu(a *App) {
 
 		action := items[result.Selected[0]].Text
 		switch action {
-		case "Start Casting", "Change Device":
+		case "Select Device", "Change Device":
 			RunDevicePicker(a)
+		case "Start Casting":
+			if a.client != nil {
+				a.client.Send(ipc.Command{Cmd: ipc.CmdStart}) //nolint:errcheck
+			}
 		case "Stop", "Stop Casting":
 			if a.client != nil {
 				a.client.Send(ipc.Command{Cmd: ipc.CmdStop}) //nolint:errcheck
@@ -87,15 +91,18 @@ func statusPill(ms menuState) string {
 	case "":
 		return "○ Service not running"
 	case ipc.StateIdle:
+		if ms.deviceName != "" {
+			return "○ Ready  —  " + ms.deviceName
+		}
 		return "○ Ready"
 	case ipc.StateStreaming:
-		return "● Streaming to " + ms.deviceName
+		return "● Casting to " + ms.deviceName
 	case ipc.StateConnecting:
-		return "◌ Connecting…"
+		return "◌ Connecting to " + ms.deviceName + "…"
 	case ipc.StateScanning:
 		return "◌ Scanning for devices…"
 	case ipc.StateError:
-		return "⚠ Error: " + ms.errMsg
+		return "⚠ " + ms.errMsg
 	default:
 		return "○ Ready"
 	}
@@ -117,8 +124,16 @@ func menuItems(ms menuState) []gaba.MenuItem {
 			{Text: "Quit"},
 		}
 	default:
+		if ms.deviceName != "" {
+			return []gaba.MenuItem{
+				{Text: "Start Casting"},
+				{Text: "Change Device"},
+				{Text: "Settings"},
+				{Text: "Quit"},
+			}
+		}
 		return []gaba.MenuItem{
-			{Text: "Start Casting"},
+			{Text: "Select Device"},
 			{Text: "Settings"},
 			{Text: "Quit"},
 		}

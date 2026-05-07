@@ -3,6 +3,7 @@ package cast
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -63,11 +64,40 @@ func (c *Controller) State() string {
 
 func (c *Controller) HandleCommand(cmd ipc.Command) {
 	switch cmd.Cmd {
-	case ipc.CmdStart, ipc.CmdSelectDevice:
-		c.startPipeline(cmd.DeviceAddr, cmd.DeviceName)
+	case ipc.CmdSelectDevice:
+		// Save device selection without starting the pipeline.
+		// If already streaming, switch to the new device immediately.
+		c.mu.Lock()
+		wasStreaming := c.state == ipc.StateStreaming
+		c.cfg.DeviceAddr = cmd.DeviceAddr
+		c.cfg.DeviceName = cmd.DeviceName
+		cfgSnap := *c.cfg
+		c.mu.Unlock()
+		config.Save(c.cfgPath, cfgSnap)
+		if wasStreaming {
+			c.startPipeline(cmd.DeviceAddr, cmd.DeviceName)
+		} else {
+			c.mu.RLock()
+			curState := c.state
+			c.mu.RUnlock()
+			c.setState(curState, cmd.DeviceName, "")
+		}
+	case ipc.CmdStart:
+		addr, name := cmd.DeviceAddr, cmd.DeviceName
+		if addr == "" {
+			c.mu.RLock()
+			addr, name = c.cfg.DeviceAddr, c.cfg.DeviceName
+			c.mu.RUnlock()
+		}
+		if addr != "" {
+			c.startPipeline(addr, name)
+		}
 	case ipc.CmdStop:
 		c.stopPipeline()
-		c.setState(ipc.StateIdle, "", "")
+		c.mu.RLock()
+		savedName := c.cfg.DeviceName
+		c.mu.RUnlock()
+		c.setState(ipc.StateIdle, savedName, "")
 	case ipc.CmdRefreshDevices:
 		go func() {
 			c.mu.RLock()
@@ -262,6 +292,7 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string) {
 		})
 
 		// Start ffmpeg
+		logger.Info("controller: ffmpeg args: %v", ffArgs)
 		ffProc := &stream.Process{}
 		if err := ffProc.Start(hlsDir, ffArgs); err != nil {
 			logger.Error("controller: ffmpeg start: %v", err)
@@ -284,18 +315,39 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string) {
 		default:
 		}
 
-		// Wait briefly for HLS to produce first segments
-		select {
-		case <-ctx.Done():
-			ffProc.Stop()
-			hlsSrv.Stop()
-			return
-		case <-time.After(2 * time.Second):
+		// Poll for HLS manifest — allow up to 10s on slow ARM hardware.
+		// A fixed 2s delay isn't enough when libx264 needs a moment to produce
+		// the first segment.
+		manifestPath := filepath.Join(hlsDir, "stream.m3u8")
+		ticker := time.NewTicker(400 * time.Millisecond)
+		deadline := time.NewTimer(10 * time.Second)
+	manifestWait:
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				deadline.Stop()
+				ffProc.Stop()
+				hlsSrv.Stop()
+				return
+			case <-deadline.C:
+				ticker.Stop()
+				logger.Warn("controller: HLS manifest not ready after 10s — proceeding")
+				break manifestWait
+			case <-ticker.C:
+				if _, statErr := os.Stat(manifestPath); statErr == nil {
+					ticker.Stop()
+					deadline.Stop()
+					logger.Info("controller: HLS manifest ready")
+					break manifestWait
+				}
+			}
 		}
 
 		// Connect Cast session
 		c.setState(ipc.StateConnecting, name, "")
 		mediaURL := "http://" + localIP + ":7979/stream.m3u8"
+		logger.Info("controller: HLS URL: %s", mediaURL)
 		sess := NewSession(c.newClient())
 		if err := sess.Start(addr, mediaURL); err != nil {
 			logger.Error("controller: cast session: %v", err)

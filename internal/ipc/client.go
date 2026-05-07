@@ -19,7 +19,11 @@ func NewClient(sockPath string) *Client {
 	return &Client{path: sockPath}
 }
 
-func (c *Client) OnEvent(fn func(Event)) { c.onEvent = fn }
+func (c *Client) OnEvent(fn func(Event)) {
+	c.mu.Lock()
+	c.onEvent = fn
+	c.mu.Unlock()
+}
 
 func (c *Client) Connect() error {
 	conn, err := net.Dial("unix", c.path)
@@ -56,8 +60,14 @@ func (c *Client) readLoop(conn net.Conn) {
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
 		var ev Event
-		if err := json.Unmarshal(sc.Bytes(), &ev); err == nil && c.onEvent != nil {
-			c.onEvent(ev)
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			continue
+		}
+		c.mu.Lock()
+		cb := c.onEvent
+		c.mu.Unlock()
+		if cb != nil {
+			cb(ev)
 		}
 	}
 }

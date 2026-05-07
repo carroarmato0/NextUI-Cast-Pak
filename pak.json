@@ -1,0 +1,12 @@
+{
+  "name": "Cast",
+  "version": "v0.1.0",
+  "type": "TOOL",
+  "description": "Cast your device screen to a Chromecast or Google TV over WiFi.",
+  "author": "Carroarmato0",
+  "repo_url": "https://github.com/carroarmato0/NextUI-Cast-Pak",
+  "release_filename": "Cast.pak.zip",
+  "screenshots": [],
+  "platforms": ["tg5040", "tg5050", "my355"],
+  "changelog": {}
+}

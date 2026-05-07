@@ -1,4 +1,4 @@
-.PHONY: test build-native build-all release deploy clean
+.PHONY: test build-native build-tg5040 build-tg5050 build-my355 build-all release deploy clean
 
 test:
 	./scripts/test.sh

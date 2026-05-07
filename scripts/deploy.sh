@@ -8,7 +8,7 @@ REMOTE_PATH="/mnt/SDCARD/Tools/$PLATFORM/Cast.pak"
 
 ./scripts/build.sh "$PLATFORM"
 
-adb shell "mkdir -p $REMOTE_PATH/lib/$PLATFORM $REMOTE_PATH/assets $REMOTE_PATH/bin/$PLATFORM"
+adb shell "mkdir -p $REMOTE_PATH/lib/$PLATFORM $REMOTE_PATH/bin/$PLATFORM"
 
 adb push bin/"$PLATFORM"/cast "$REMOTE_PATH/cast"
 adb shell chmod +x "$REMOTE_PATH/cast"
@@ -19,9 +19,6 @@ adb push pak.json "$REMOTE_PATH/pak.json"
 for so in lib/"$PLATFORM"/*.so*; do
     [ -f "$so" ] && adb push "$so" "$REMOTE_PATH/$so"
 done
-
-[ -f assets/ca-certificates.crt ] && \
-    adb push assets/ca-certificates.crt "$REMOTE_PATH/assets/ca-certificates.crt"
 
 if [ -f bin/"$PLATFORM"/ffmpeg ]; then
     adb push bin/"$PLATFORM"/ffmpeg "$REMOTE_PATH/bin/$PLATFORM/ffmpeg"

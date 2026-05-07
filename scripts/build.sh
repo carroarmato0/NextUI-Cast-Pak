@@ -119,11 +119,7 @@ build_native() {
 build_platform() {
     PLATFORM="$1"
 
-    mkdir -p bin/"$PLATFORM" lib/"$PLATFORM" assets
-
-    # Copy CA bundle into assets/ so SSL_CERT_FILE works on devices without a
-    # system certificate store.
-    cp /etc/ssl/certs/ca-certificates.crt assets/ca-certificates.crt 2>/dev/null || true
+    mkdir -p bin/"$PLATFORM" lib/"$PLATFORM"
 
     # CC, PKG_CONFIG_PATH, and SYSROOT are set by the LoveRetro toolchain image.
     # -a:        force recompile; cached .a files from a different toolchain/image

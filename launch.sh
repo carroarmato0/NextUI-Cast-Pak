@@ -26,7 +26,6 @@ done
 unset _d
 export LD_LIBRARY_PATH="${NATIVE_SDL_LIB:+$NATIVE_SDL_LIB:}$PLATFORM_LIB:$LD_LIBRARY_PATH"
 export PATH="$PAK_DIR/bin/$PLATFORM:$PAK_DIR:$PATH"
-export SSL_CERT_FILE="$PAK_DIR/assets/ca-certificates.crt"
 mkdir -p "$HOME" /tmp/cast/hls
 
 # Start daemon if not already running

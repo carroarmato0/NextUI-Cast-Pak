@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 )
@@ -18,6 +19,9 @@ func NewHLSServer(dir, addr string) *HLSServer {
 }
 
 func (h *HLSServer) Start() error {
+	if h.listener != nil {
+		return fmt.Errorf("HLSServer already started")
+	}
 	ln, err := net.Listen("tcp", h.addr)
 	if err != nil {
 		return err
@@ -32,7 +36,11 @@ func (h *HLSServer) Start() error {
 
 func (h *HLSServer) Stop() {
 	if h.srv != nil {
+		// context.Background() is intentional: on embedded hardware we prefer
+		// waiting for active clients to disconnect rather than forcefully closing.
 		h.srv.Shutdown(context.Background())
+		h.srv = nil
+		h.listener = nil
 	}
 }
 

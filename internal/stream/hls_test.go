@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/carroarmato0/nextui-cast-pak/internal/stream"
 )
@@ -15,7 +14,9 @@ import (
 func TestHLSServer_ServesFile(t *testing.T) {
 	dir := t.TempDir()
 	content := "#EXTM3U\n#EXT-X-VERSION:3\n"
-	os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte(content), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte(content), 0644); err != nil {
+		t.Fatalf("setup: write fixture: %v", err)
+	}
 
 	srv := stream.NewHLSServer(dir, ":0")
 	if err := srv.Start(); err != nil {
@@ -23,13 +24,18 @@ func TestHLSServer_ServesFile(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	time.Sleep(20 * time.Millisecond)
 	resp, err := http.Get("http://" + srv.Addr() + "/stream.m3u8")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
 	if string(body) != content {
 		t.Errorf("got %q, want %q", body, content)
 	}

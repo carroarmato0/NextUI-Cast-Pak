@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,19 +16,28 @@ import (
 	"github.com/carroarmato0/nextui-cast-pak/internal/wifi"
 )
 
+const (
+	sockPath = "/tmp/cast/control.sock"
+	pidPath  = "/tmp/cast/daemon.pid"
+	castDir  = "/tmp/cast"
+)
+
 func runDaemon() {
 	cfgPath := filepath.Join(os.Getenv("HOME"), "config.json")
-	_ = os.MkdirAll(filepath.Dir(cfgPath), 0755)
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
+		logger.Error("daemon: mkdir config dir: %v", err)
+	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		logger.Error("daemon: config load: %v", err)
+		os.Exit(1)
 	}
 
 	logger.SetLevel(logger.LevelFromString(cfg.LogLevel))
 
-	sockPath := "/tmp/cast/control.sock"
-	pidPath := "/tmp/cast/daemon.pid"
-	_ = os.MkdirAll("/tmp/cast", 0755)
+	if err := os.MkdirAll(castDir, 0755); err != nil {
+		logger.Error("daemon: mkdir cast dir: %v", err)
+	}
 
 	scanner := discovery.NewRealScanner()
 	go scanner.Scan() //nolint:errcheck
@@ -37,10 +47,6 @@ func runDaemon() {
 		ctrl.HandleCommand(cmd)
 	})
 	srv.SetPidFile(pidPath)
-	if err := srv.Start(); err != nil {
-		logger.Error("daemon: ipc server: %v", err)
-		os.Exit(1)
-	}
 
 	ctrl = cast.NewController(
 		&cfg, cfgPath, srv,
@@ -48,6 +54,11 @@ func runDaemon() {
 		func() cast.CastClient { return cast.NewRealClient() },
 		wifi.HasWiFi,
 	)
+
+	if err := srv.Start(); err != nil {
+		logger.Error("daemon: ipc server: %v", err)
+		os.Exit(1)
+	}
 
 	// Auto-connect to last device if configured
 	if cfg.DeviceAddr != "" {
@@ -59,13 +70,19 @@ func runDaemon() {
 		})
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	// Background device refresh every 30s
 	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
-			case <-time.After(30 * time.Second):
+			case <-ticker.C:
 				scanner.Scan() //nolint:errcheck
 				ctrl.HandleCommand(ipc.Command{Cmd: ipc.CmdGetStatus})
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -75,6 +92,7 @@ func runDaemon() {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	sig := <-sigCh
 	logger.Info("daemon: signal %v — shutting down", sig)
+	cancel()
 	ctrl.HandleCommand(ipc.Command{Cmd: ipc.CmdStop})
 	srv.Stop()
 }

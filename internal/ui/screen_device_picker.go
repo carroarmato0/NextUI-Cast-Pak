@@ -95,7 +95,7 @@ func RunDevicePicker(a *App) {
 			continue
 		}
 
-		if len(result.Selected) == 0 {
+		if len(result.Selected) == 0 || result.Selected[0] >= len(devs) {
 			continue
 		}
 

@@ -61,6 +61,7 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) Broadcast(ev Event) {
+	// Event contains only string/int/struct fields — marshal cannot fail.
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return

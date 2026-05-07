@@ -12,15 +12,12 @@ func defaultAddrs(iface net.Interface) ([]net.Addr, error) {
 	return iface.Addrs()
 }
 
-// HasWiFi returns true if any non-loopback, up interface with a name starting
-// with "wlan" or "wl" has an IPv4 address. Pass nil for addrsFn to use the
-// real implementation.
+// HasWiFi returns true if any non-loopback, up interface whose name starts with "wl" has an IPv4 address. Pass nil for either parameter to use the real net.Interfaces / iface.Addrs implementation.
 func HasWiFi(ifacesFn InterfacesFn, addrsFn AddrsFn) bool {
 	return LocalIP(ifacesFn, addrsFn) != ""
 }
 
-// LocalIP returns the first IPv4 address of a non-loopback, up wireless
-// interface (name prefix "wlan" or "wl"), or "" if none found.
+// LocalIP returns the first IPv4 address of a non-loopback, up wireless interface (name prefix "wl"), or "" if none found. Pass nil for either parameter to use the real implementation.
 func LocalIP(ifacesFn InterfacesFn, addrsFn AddrsFn) string {
 	if ifacesFn == nil {
 		ifacesFn = net.Interfaces
@@ -36,7 +33,7 @@ func LocalIP(ifacesFn InterfacesFn, addrsFn AddrsFn) string {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		if !strings.HasPrefix(iface.Name, "wlan") && !strings.HasPrefix(iface.Name, "wl") {
+		if !strings.HasPrefix(iface.Name, "wl") {
 			continue
 		}
 		addrs, err := addrsFn(iface)
@@ -50,6 +47,9 @@ func LocalIP(ifacesFn InterfacesFn, addrsFn AddrsFn) string {
 				ip = v.IP
 			case *net.IPAddr:
 				ip = v.IP
+			}
+			if ip == nil {
+				continue
 			}
 			if ip4 := ip.To4(); ip4 != nil {
 				return ip4.String()

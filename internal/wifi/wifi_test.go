@@ -76,3 +76,18 @@ func TestLocalIP_ReturnsWlanIP(t *testing.T) {
 		t.Errorf("LocalIP = %q, want %q", ip, "192.168.1.10")
 	}
 }
+
+func TestLocalIP_SkipsIPv6Only(t *testing.T) {
+	ifaces := makeIfaces([]struct {
+		name  string
+		flags net.Flags
+		addrs []string
+	}{{"wlan0", net.FlagUp, nil}})
+	addrs := func(iface net.Interface) ([]net.Addr, error) {
+		return []net.Addr{&net.IPAddr{IP: net.ParseIP("fe80::1")}}, nil
+	}
+	ip := wifi.LocalIP(ifaces, addrs)
+	if ip != "" {
+		t.Errorf("IPv6-only interface should return empty, got %q", ip)
+	}
+}

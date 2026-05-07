@@ -12,18 +12,45 @@ import (
 )
 
 func RunSettings(a *App) {
+	// Save helpers — called immediately on each option change (matches Itch-io Pak pattern).
+	// This ensures changes are persisted even when the user exits with B.
+	saveQuality := func(val string) {
+		a.cfg.Quality = val
+		if err := config.Save(a.cfgPath, a.cfg); err != nil {
+			logger.Error("ui: save config: %v", err)
+		}
+		if a.client != nil {
+			a.client.Send(ipc.Command{Cmd: ipc.CmdSetQuality, Quality: val}) //nolint:errcheck
+		}
+	}
+	saveAudio := func(val bool) {
+		a.cfg.Audio = val
+		if err := config.Save(a.cfgPath, a.cfg); err != nil {
+			logger.Error("ui: save config: %v", err)
+		}
+		if a.client != nil {
+			a.client.Send(ipc.Command{Cmd: ipc.CmdSetAudio, Audio: &val}) //nolint:errcheck
+		}
+	}
+	saveLog := func(val string) {
+		a.cfg.LogLevel = val
+		if err := config.Save(a.cfgPath, a.cfg); err != nil {
+			logger.Error("ui: save config: %v", err)
+		}
+	}
+
 	qualityOptions := []gaba.Option{
-		{DisplayName: "Low", Value: "low"},
-		{DisplayName: "Medium", Value: "medium"},
-		{DisplayName: "High", Value: "high"},
+		{DisplayName: "Low", Value: "low", OnUpdate: func(_ interface{}) { saveQuality("low") }},
+		{DisplayName: "Medium", Value: "medium", OnUpdate: func(_ interface{}) { saveQuality("medium") }},
+		{DisplayName: "High", Value: "high", OnUpdate: func(_ interface{}) { saveQuality("high") }},
 	}
 	audioOptions := []gaba.Option{
-		{DisplayName: "On", Value: "true"},
-		{DisplayName: "Off", Value: "false"},
+		{DisplayName: "On", Value: "true", OnUpdate: func(_ interface{}) { saveAudio(true) }},
+		{DisplayName: "Off", Value: "false", OnUpdate: func(_ interface{}) { saveAudio(false) }},
 	}
 	logOptions := []gaba.Option{
-		{DisplayName: "Info", Value: "info"},
-		{DisplayName: "Debug", Value: "debug"},
+		{DisplayName: "Info", Value: "info", OnUpdate: func(_ interface{}) { saveLog("info") }},
+		{DisplayName: "Debug", Value: "debug", OnUpdate: func(_ interface{}) { saveLog("debug") }},
 	}
 
 	qualityIdx := optionIndex(qualityOptions, a.cfg.Quality)
@@ -62,38 +89,7 @@ func RunSettings(a *App) {
 		},
 	}
 
-	result, err := gaba.OptionsList("Settings", gaba.OptionListSettings{}, items)
-	if err != nil {
-		return
-	}
-
-	// When About (clickable) is selected, OptionsList returns with that item selected.
-	// Its OnUpdate was already called; no config to persist for that item.
-	if result.Items[3].Options[result.Items[3].SelectedOption].Type == gaba.OptionTypeClickable {
-		return
-	}
-
-	// Persist changes
-	qualitySelected := result.Items[0].SelectedOption
-	a.cfg.Quality = fmt.Sprintf("%s", result.Items[0].Options[qualitySelected].Value)
-
-	audioSelected := result.Items[1].SelectedOption
-	audioVal := fmt.Sprintf("%s", result.Items[1].Options[audioSelected].Value)
-	a.cfg.Audio = audioVal == "true"
-
-	logSelected := result.Items[2].SelectedOption
-	a.cfg.LogLevel = fmt.Sprintf("%s", result.Items[2].Options[logSelected].Value)
-
-	if err := config.Save(a.cfgPath, a.cfg); err != nil {
-		logger.Error("ui: save config: %v", err)
-	}
-
-	// Hot-reload in daemon
-	if a.client != nil {
-		a.client.Send(ipc.Command{Cmd: ipc.CmdSetQuality, Quality: a.cfg.Quality}) //nolint:errcheck
-		audio := a.cfg.Audio
-		a.client.Send(ipc.Command{Cmd: ipc.CmdSetAudio, Audio: &audio}) //nolint:errcheck
-	}
+	gaba.OptionsList("Settings", gaba.OptionListSettings{}, items) //nolint:errcheck
 }
 
 func optionIndex(opts []gaba.Option, value string) int {

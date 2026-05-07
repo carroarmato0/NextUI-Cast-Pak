@@ -101,6 +101,14 @@ func RunDevicePicker(a *App) {
 
 		selected := devs[result.Selected[0]]
 		if a.client != nil {
+			// Optimistically update local state so the main menu shows
+			// "Start Casting" immediately without waiting for the daemon broadcast.
+			cur := latestState.Load().(menuState)
+			latestState.Store(menuState{
+				state:      cur.state,
+				deviceName: selected.Name,
+				errMsg:     cur.errMsg,
+			})
 			a.client.Send(ipc.Command{ //nolint:errcheck
 				Cmd:        ipc.CmdSelectDevice,
 				DeviceAddr: selected.Addr,

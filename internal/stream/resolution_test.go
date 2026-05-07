@@ -12,8 +12,8 @@ import (
 
 func TestReadNative_ParsesFile(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "virtual_size")
-	os.WriteFile(p, []byte("1280x720\n"), 0644)
+	p := filepath.Join(dir, "modes")
+	os.WriteFile(p, []byte("U:1280x720p-60\n"), 0644)
 
 	got := stream.ReadNativeResolution(p)
 	want := image.Point{X: 1280, Y: 720}
@@ -23,9 +23,10 @@ func TestReadNative_ParsesFile(t *testing.T) {
 }
 
 func TestReadNative_ParsesNonDefaultResolution(t *testing.T) {
+	// TrimUI Brick (tg5040) reports U:1024x768p-60.
 	dir := t.TempDir()
-	p := filepath.Join(dir, "virtual_size")
-	os.WriteFile(p, []byte("1024x768\n"), 0644)
+	p := filepath.Join(dir, "modes")
+	os.WriteFile(p, []byte("U:1024x768p-60\n"), 0644)
 
 	got := stream.ReadNativeResolution(p)
 	want := image.Point{X: 1024, Y: 768}
@@ -35,7 +36,7 @@ func TestReadNative_ParsesNonDefaultResolution(t *testing.T) {
 }
 
 func TestReadNative_FallbackOnMissing(t *testing.T) {
-	got := stream.ReadNativeResolution("/nonexistent/virtual_size")
+	got := stream.ReadNativeResolution("/nonexistent/modes")
 	want := image.Point{X: 1280, Y: 720}
 	if got != want {
 		t.Errorf("fallback: got %v, want %v", got, want)

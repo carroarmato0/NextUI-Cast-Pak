@@ -3,14 +3,18 @@ package logger
 import (
 	"bytes"
 	"os"
-	"strings"
 )
 
 const (
 	logMaxBytes = 10 * 1024 * 1024
-	logMaxRuns  = 5
+	logMaxRuns  = 5 // keep 4 old + 1 new = 5 total
 )
 
+// RotateLog trims path so that at most logMaxRuns sentinel-delimited runs are
+// retained and the file does not exceed logMaxBytes.
+//
+// WARNING: startSentinel must not appear literally inside any log message body;
+// every occurrence is treated as the start of a new run.
 func RotateLog(path, startSentinel string) {
 	data, err := os.ReadFile(path)
 	if err != nil || len(data) == 0 {
@@ -36,10 +40,11 @@ func RotateLog(path, startSentinel string) {
 
 func splitRuns(data []byte, sentinel string) [][]byte {
 	lines := bytes.SplitAfter(data, []byte("\n"))
+	sentinelBytes := []byte(sentinel)
 	var runs [][]byte
 	var cur []byte
 	for _, line := range lines {
-		if strings.Contains(string(line), sentinel) && len(cur) > 0 {
+		if bytes.Contains(line, sentinelBytes) && len(cur) > 0 {
 			runs = append(runs, cur)
 			cur = append([]byte(nil), line...)
 		} else {

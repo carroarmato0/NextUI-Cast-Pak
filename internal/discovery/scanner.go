@@ -30,9 +30,13 @@ func NewRealScanner() *Scanner {
 		go func() {
 			defer close(done)
 			for entry := range ch {
+				ip := entry.AddrV4.To4()
+				if ip == nil {
+					ip = entry.AddrV4
+				}
 				devs = append(devs, Device{
 					Name:  entry.Name,
-					Addr:  fmt.Sprintf("%s:%d", entry.AddrV4, entry.Port),
+					Addr:  fmt.Sprintf("%s:%d", ip, entry.Port),
 					Model: modelFromInfoFields(entry.InfoFields),
 				})
 			}
@@ -43,6 +47,7 @@ func NewRealScanner() *Scanner {
 			Entries: ch,
 		}
 		err := mdns.Query(params)
+		// mdns.Query does not close Entries; we close it here after the query completes.
 		close(ch)
 		<-done
 		return devs, err

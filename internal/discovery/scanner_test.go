@@ -40,7 +40,9 @@ func TestScanner_FindByName(t *testing.T) {
 	s := discovery.NewScanner(func(service string, timeout time.Duration) ([]discovery.Device, error) {
 		return devs, nil
 	})
-	s.Scan()
+	if err := s.Scan(); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
 
 	found, ok := s.FindByName("Bedroom TV")
 	if !ok {

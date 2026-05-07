@@ -150,11 +150,19 @@ build_platform() {
     # without X11 / PulseAudio / Wayland so they work on embedded devices.
     # Copy only the real versioned file under the SONAME name so the zip ships
     # a single file per library rather than a symlink + versioned duplicate.
+    #
+    # SDL2_gfx: tg5050 ships the real library (NEEDED: libSDL2_gfx-1.0.so.0);
+    # tg5040/my355 use a cross-link stub (NEEDED: libSDL2_gfx.so).  Bundle
+    # whichever form the sysroot provides.
     rm -f lib/"$PLATFORM"/libSDL2*.so*
     SDL2_SO=$(ls "$SYSROOT/usr/lib"/libSDL2-2.0.so.0.* 2>/dev/null | grep -v '\.so$' | head -1)
     SDL2_TTF_SO=$(ls "$SYSROOT/usr/lib"/libSDL2_ttf-2.0.so.0.* 2>/dev/null | grep -v '\.so$' | head -1)
-    [ -n "$SDL2_SO" ]     && cp "$SDL2_SO"     lib/"$PLATFORM"/libSDL2-2.0.so.0
-    [ -n "$SDL2_TTF_SO" ] && cp "$SDL2_TTF_SO" lib/"$PLATFORM"/libSDL2_ttf-2.0.so.0
+    SDL2_GFX_SO=$(ls "$SYSROOT/usr/lib"/libSDL2_gfx-1.0.so.0 2>/dev/null | head -1)
+    SDL2_GFX_DEV=$(ls "$SYSROOT/usr/lib"/libSDL2_gfx.so 2>/dev/null | head -1)
+    [ -n "$SDL2_SO" ]      && cp "$SDL2_SO"      lib/"$PLATFORM"/libSDL2-2.0.so.0
+    [ -n "$SDL2_TTF_SO" ]  && cp "$SDL2_TTF_SO"  lib/"$PLATFORM"/libSDL2_ttf-2.0.so.0
+    [ -f "$SDL2_GFX_SO" ]  && cp "$SDL2_GFX_SO"  lib/"$PLATFORM"/libSDL2_gfx-1.0.so.0
+    [ -n "$SDL2_GFX_DEV" ] && cp "$SDL2_GFX_DEV" lib/"$PLATFORM"/libSDL2_gfx.so
 }
 
 case "$TARGET" in

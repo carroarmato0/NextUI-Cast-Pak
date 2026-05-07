@@ -1,0 +1,27 @@
+ARG PLATFORM=tg5040
+FROM loveretro/toolchain-${PLATFORM}:latest AS toolchain
+
+FROM golang:1.22-bookworm
+
+ARG PLATFORM=tg5040
+ENV PLATFORM=${PLATFORM}
+
+COPY --from=toolchain /sysroot /sysroot
+COPY --from=toolchain /toolchain /toolchain
+
+ENV PATH="/toolchain/bin:$PATH"
+ENV SYSROOT=/sysroot
+ENV PKG_CONFIG_PATH="${SYSROOT}/usr/lib/pkgconfig"
+ENV CC="aarch64-linux-gnu-gcc"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc-aarch64-linux-gnu pkg-config curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download static ffmpeg for ARM64
+RUN FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" && \
+    curl -fsSL "$FFMPEG_URL" | tar -xJ --strip-components=1 -C /usr/local/bin/ \
+    --wildcards '*/ffmpeg' && \
+    chmod +x /usr/local/bin/ffmpeg
+
+WORKDIR /workspace

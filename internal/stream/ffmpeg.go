@@ -75,7 +75,7 @@ func BuildArgs(cfg FFmpegConfig) []string {
 	args = append(args,
 		"-f", "hls",
 		"-hls_time", "1",
-		"-hls_list_size", "3",
+		"-hls_list_size", "10",
 		"-hls_flags", "delete_segments+temp_file",
 		manifest,
 	)

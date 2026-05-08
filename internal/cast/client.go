@@ -42,8 +42,12 @@ func (c *chromeCastClient) Connect(addr string) error {
 
 // Load instructs the Chromecast to play the given URL with the given content type.
 func (c *chromeCastClient) Load(url, contentType string) error {
-	// startTime=0, transcode=false, detach=false, forceDetach=false
-	return c.app.Load(url, 0, contentType, false, false, false)
+	// detach=true: app.Load() would otherwise call MediaWait() which blocks
+	// until the Chromecast reports FINISHED — i.e. until playback ends.
+	// For an http:// URL (isExternalMedia=true) detach=true triggers the
+	// early-return path, so this call returns as soon as the LOAD command
+	// has been sent rather than after playback is over.
+	return c.app.Load(url, 0, contentType, false, true, false)
 }
 
 // Stop stops the current media on the Chromecast.

@@ -1,1 +1,15 @@
 .worktrees/
+bin/tg5040/cast
+bin/tg5050/cast
+bin/my355/cast
+bin/native/
+bin/tg5040/ffmpeg
+bin/tg5050/ffmpeg
+bin/my355/ffmpeg
+lib/tg5040/*.so*
+lib/tg5050/*.so*
+lib/my355/*.so*
+dist/
+.go_cache/
+*.prof
+.profile-flags

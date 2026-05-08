@@ -36,6 +36,7 @@ func TestBuildArgs_LowPreset(t *testing.T) {
 	assertContains("crf 35")
 	assertContains("scale=640:480")
 	assertAbsent("-f alsa")
+	assertContains("anullsrc") // silent audio keeps Chromecast happy
 	assertContains("stream.m3u8")
 }
 
@@ -105,8 +106,9 @@ func TestBuildArgs_KeyframeInterval(t *testing.T) {
 	args := stream.BuildArgs(cfg)
 	joined := strings.Join(args, " ")
 
-	// -g must equal fps so each HLS 1s segment contains a keyframe
-	if !strings.Contains(joined, "-g 15") {
-		t.Errorf("medium should set -g 15 (keyframe per second) in: %s", joined)
+	// -g must be fps/2 so each 0.5 s HLS segment can start on a keyframe;
+	// medium is 15 fps → -g 7
+	if !strings.Contains(joined, "-g 7") {
+		t.Errorf("medium should set -g 7 (keyframe per half-second) in: %s", joined)
 	}
 }

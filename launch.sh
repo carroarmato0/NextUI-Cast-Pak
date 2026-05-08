@@ -38,7 +38,7 @@ else
         PROFILE_FLAGS="$(cat "$PAK_DIR/.profile-flags" | grep daemon)"
     fi
     # shellcheck disable=SC2086
-    "$PAK_DIR/cast" --daemon $PROFILE_FLAGS &
+    "$PAK_DIR/cast" --daemon $PROFILE_FLAGS > /tmp/cast/daemon.log 2>&1 &
 fi
 
 # Launch UI

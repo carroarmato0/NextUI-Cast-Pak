@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,7 +181,7 @@ func (c *Controller) pushDevices() {
 }
 
 func (c *Controller) startPipeline(addr, name string) {
-	c.stopPipeline()
+	hadSession := c.stopPipeline()
 
 	if !c.hasWiFi(nil, nil) {
 		c.setState(ipc.StateError, "", "WiFi not available")
@@ -199,10 +200,12 @@ func (c *Controller) startPipeline(addr, name string) {
 	c.cancelFn = cancel
 	c.mu.Unlock()
 
-	go c.runPipeline(ctx, addr, name)
+	go c.runPipeline(ctx, addr, name, hadSession)
 }
 
-func (c *Controller) stopPipeline() {
+// stopPipeline tears down the active pipeline and returns true if a cast
+// session was running (so the caller can add a grace period before reconnecting).
+func (c *Controller) stopPipeline() bool {
 	c.mu.Lock()
 	cancel := c.cancelFn
 	c.cancelFn = nil
@@ -227,11 +230,23 @@ func (c *Controller) stopPipeline() {
 		hlsSrv.Stop()
 	}
 	os.RemoveAll("/tmp/cast/hls")
+	return sess != nil
 }
 
-func (c *Controller) runPipeline(ctx context.Context, addr, name string) {
+func (c *Controller) runPipeline(ctx context.Context, addr, name string, restart bool) {
 	const hlsDir = "/tmp/cast/hls"
 	const hlsAddr = ":7979"
+
+	// go-chromecast's dialerTimeout is 3 s. After sending a STOP command the
+	// Chromecast needs a moment before it accepts a new connection; without
+	// this pause a rapid restart reliably times out.
+	if restart {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
+	}
 
 	for attempt := 0; ; attempt++ {
 		select {
@@ -353,7 +368,7 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string) {
 		sess := NewSession(c.newClient())
 		if err := sess.Start(addr, mediaURL); err != nil {
 			logger.Error("controller: cast session: %v", err)
-			c.setState(ipc.StateError, name, err.Error())
+			c.setState(ipc.StateError, name, friendlyCastErr(err))
 			ffProc.Stop()
 			hlsSrv.Stop()
 			c.mu.Lock()
@@ -396,6 +411,19 @@ func (c *Controller) restartFFmpeg() {
 	name := c.cfg.DeviceName
 	c.mu.RUnlock()
 	c.startPipeline(addr, name)
+}
+
+// friendlyCastErr converts low-level connection errors into messages a user
+// can act on, leaving other errors (e.g. LOAD_FAILED) as-is.
+func friendlyCastErr(err error) string {
+	s := err.Error()
+	if strings.Contains(s, "deadline exceeded") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "no route to host") ||
+		strings.Contains(s, "network is unreachable") {
+		return "Chromecast not responding — is the TV on?"
+	}
+	return s
 }
 
 func (c *Controller) sleep(ctx context.Context, attempt int) {

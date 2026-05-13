@@ -100,13 +100,21 @@ func TestHLSServer_TracksTsButNotManifest(t *testing.T) {
 
 	// Fetching the manifest must NOT update the timestamp.
 	before := time.Now()
-	http.Get("http://" + srv.Addr() + "/stream.m3u8") //nolint:errcheck
+	resp, err := http.Get("http://" + srv.Addr() + "/stream.m3u8")
+	if err != nil {
+		t.Fatalf("GET manifest: %v", err)
+	}
+	resp.Body.Close()
 	if !srv.LastSegmentFetchAt().IsZero() {
 		t.Error("manifest fetch must not update LastSegmentFetchAt")
 	}
 
 	// Fetching a .ts segment MUST update the timestamp.
-	http.Get("http://" + srv.Addr() + "/stream0.ts") //nolint:errcheck
+	resp, err = http.Get("http://" + srv.Addr() + "/stream0.ts")
+	if err != nil {
+		t.Fatalf("GET segment: %v", err)
+	}
+	resp.Body.Close()
 	last := srv.LastSegmentFetchAt()
 	if last.IsZero() {
 		t.Error("LastSegmentFetchAt should be non-zero after .ts fetch")

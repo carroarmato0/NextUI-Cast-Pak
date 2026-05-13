@@ -36,6 +36,9 @@ type Controller struct {
 	ffProc   *stream.Process
 	session  *Session
 	cancelFn context.CancelFunc
+
+	sessionStartedAt time.Time // zero when no active session
+	reconnects       int       // resets to 0 on CmdStop
 }
 
 func NewController(
@@ -95,9 +98,11 @@ func (c *Controller) HandleCommand(cmd ipc.Command) {
 		}
 	case ipc.CmdStop:
 		c.stopPipeline()
-		c.mu.RLock()
+		c.mu.Lock()
+		c.sessionStartedAt = time.Time{}
+		c.reconnects = 0
 		savedName := c.cfg.DeviceName
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		c.setState(ipc.StateIdle, savedName, "")
 	case ipc.CmdRefreshDevices:
 		go func() {
@@ -144,30 +149,34 @@ func (c *Controller) HandleCommand(cmd ipc.Command) {
 	}
 }
 
+func (c *Controller) currentStateEvent() ipc.Event {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var sessionStartedAtUnix int64
+	if !c.sessionStartedAt.IsZero() {
+		sessionStartedAtUnix = c.sessionStartedAt.Unix()
+	}
+	return ipc.Event{
+		Event:            ipc.EventState,
+		State:            c.state,
+		DeviceName:       c.deviceName,
+		Error:            c.errMsg,
+		SessionStartedAt: sessionStartedAtUnix,
+		Reconnects:       c.reconnects,
+	}
+}
+
 func (c *Controller) setState(state, deviceName, errMsg string) {
 	c.mu.Lock()
 	c.state = state
 	c.deviceName = deviceName
 	c.errMsg = errMsg
 	c.mu.Unlock()
-	c.srv.Broadcast(ipc.Event{
-		Event:      ipc.EventState,
-		State:      state,
-		DeviceName: deviceName,
-		Error:      errMsg,
-	})
+	c.srv.Broadcast(c.currentStateEvent())
 }
 
 func (c *Controller) pushCurrentState() {
-	c.mu.RLock()
-	ev := ipc.Event{
-		Event:      ipc.EventState,
-		State:      c.state,
-		DeviceName: c.deviceName,
-		Error:      c.errMsg,
-	}
-	c.mu.RUnlock()
-	c.srv.Broadcast(ev)
+	c.srv.Broadcast(c.currentStateEvent())
 	c.pushDevices()
 }
 
@@ -253,6 +262,10 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string, restart
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		if attempt > 0 || restart {
+			c.setState(ipc.StateReconnecting, name, "")
 		}
 
 		if !c.hasWiFi(nil, nil) {
@@ -380,6 +393,11 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string, restart
 		}
 		c.mu.Lock()
 		c.session = sess
+		if c.sessionStartedAt.IsZero() {
+			c.sessionStartedAt = time.Now()
+		} else {
+			c.reconnects++
+		}
 		c.mu.Unlock()
 		c.setState(ipc.StateStreaming, name, "")
 		attempt = 0
@@ -400,7 +418,7 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string, restart
 			c.mu.Unlock()
 			sess.Stop()
 			hlsSrv.Stop()
-			c.setState(ipc.StateError, name, "ffmpeg exited")
+			c.setState(ipc.StateReconnecting, name, "ffmpeg exited")
 		}
 	}
 }

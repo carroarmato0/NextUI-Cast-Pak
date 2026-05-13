@@ -65,9 +65,11 @@ func (a *App) Run() {
 		switch ev.Event {
 		case ipc.EventState:
 			latestState.Store(menuState{
-				state:      ev.State,
-				deviceName: ev.DeviceName,
-				errMsg:     ev.Error,
+				state:            ev.State,
+				deviceName:       ev.DeviceName,
+				errMsg:           ev.Error,
+				sessionStartedAt: ev.SessionStartedAt,
+				reconnects:       ev.Reconnects,
 			})
 		case ipc.EventDevices:
 			deviceCacheMu.Lock()

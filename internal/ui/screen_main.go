@@ -3,7 +3,10 @@
 package ui
 
 import (
+	"fmt"
+	"strconv"
 	"sync/atomic"
+	"time"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
 	"github.com/carroarmato0/nextui-cast-pak/internal/ipc"
@@ -12,9 +15,11 @@ import (
 )
 
 type menuState struct {
-	state      string
-	deviceName string
-	errMsg     string
+	state            string
+	deviceName       string
+	errMsg           string
+	sessionStartedAt int64
+	reconnects       int
 }
 
 var latestState atomic.Value // stores menuState
@@ -76,7 +81,19 @@ func RunMainMenu(a *App) {
 	}
 }
 
+func sessionAge(startedAt int64) string {
+	if startedAt == 0 {
+		return ""
+	}
+	d := time.Since(time.Unix(startedAt, 0)).Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%dm %02ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
 func statusPill(ms menuState) string {
+	age := sessionAge(ms.sessionStartedAt)
 	switch ms.state {
 	case "":
 		return "○ Service not running"
@@ -86,13 +103,24 @@ func statusPill(ms menuState) string {
 		}
 		return "○ Ready"
 	case ipc.StateStreaming:
-		return "● Casting to " + ms.deviceName
+		line2 := age + "  ·  Reconnects: " + strconv.Itoa(ms.reconnects)
+		return "● Casting to " + ms.deviceName + "\n" + line2
+	case ipc.StateReconnecting:
+		line2 := fmt.Sprintf("Attempt %d", ms.reconnects+1)
+		if age != "" {
+			line2 += "  ·  Session: " + age
+		}
+		return "◌ Reconnecting to " + ms.deviceName + "…\n" + line2
 	case ipc.StateConnecting:
 		return "◌ Connecting to " + ms.deviceName + "…"
 	case ipc.StateScanning:
 		return "◌ Scanning for devices…"
 	case ipc.StateError:
-		return "⚠ " + ms.errMsg
+		pill := "⚠ " + ms.errMsg
+		if age != "" {
+			pill += "\nStopped after " + age
+		}
+		return pill
 	default:
 		return "○ Ready"
 	}
@@ -105,6 +133,12 @@ func menuItems(ms menuState) []gaba.MenuItem {
 			{Text: "Stop Casting"},
 			{Text: "Change Device"},
 			{Text: "Settings"},
+			{Text: "Quit"},
+		}
+	case ipc.StateReconnecting:
+		return []gaba.MenuItem{
+			{Text: "Stop"},
+			{Text: "Change Device"},
 			{Text: "Quit"},
 		}
 	case ipc.StateScanning, ipc.StateConnecting:

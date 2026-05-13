@@ -82,16 +82,17 @@ func (a *App) Run() {
 			deviceCacheMu.Unlock()
 		}
 	})
+	defer a.client.Close()
 
 	// Fetch the current daemon state and wait briefly so the first gaba.List call
 	// renders the correct state. Without this wait, gaba.List blocks on the first
 	// call and the CmdGetStatus response arrives too late to affect the display.
-	if a.client != nil {
-		a.client.Send(ipc.Command{Cmd: ipc.CmdGetStatus}) //nolint:errcheck
-		select {
-		case <-stateReceived:
-		case <-time.After(500 * time.Millisecond):
-		}
+	a.client.Send(ipc.Command{Cmd: ipc.CmdGetStatus}) //nolint:errcheck
+	select {
+	case <-stateReceived:
+		logger.Debug("ui: initial state received from daemon")
+	case <-time.After(500 * time.Millisecond):
+		logger.Warn("ui: timed out waiting for initial daemon state")
 	}
 
 	RunMainMenu(a)

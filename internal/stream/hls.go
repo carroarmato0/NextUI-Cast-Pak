@@ -15,6 +15,7 @@ type HLSServer struct {
 	addr     string
 	listener net.Listener
 	srv      *http.Server
+	stopMu   sync.Mutex
 
 	lastFetchMu sync.RWMutex
 	lastFetchAt time.Time
@@ -77,6 +78,8 @@ func (h *HLSServer) handler() http.Handler {
 }
 
 func (h *HLSServer) Stop() {
+	h.stopMu.Lock()
+	defer h.stopMu.Unlock()
 	if h.srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

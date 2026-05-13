@@ -20,11 +20,12 @@ const (
 
 // Daemon states.
 const (
-	StateIdle       = "idle"
-	StateScanning   = "scanning"
-	StateConnecting = "connecting"
-	StateStreaming  = "streaming"
-	StateError      = "error"
+	StateIdle         = "idle"
+	StateScanning     = "scanning"
+	StateConnecting   = "connecting"
+	StateStreaming    = "streaming"
+	StateReconnecting = "reconnecting"
+	StateError        = "error"
 )
 
 // Command is a UI→daemon message.
@@ -38,12 +39,14 @@ type Command struct {
 
 // Event is a daemon→UI push message.
 type Event struct {
-	Event      string       `json:"event"`
-	State      string       `json:"state,omitempty"`
-	DeviceName string       `json:"device_name,omitempty"`
-	Error      string       `json:"error,omitempty"`
-	Devices    []DeviceInfo `json:"devices,omitempty"`
-	Kbps       int          `json:"kbps,omitempty"`
+	Event            string       `json:"event"`
+	State            string       `json:"state,omitempty"`
+	DeviceName       string       `json:"device_name,omitempty"`
+	Error            string       `json:"error,omitempty"`
+	Devices          []DeviceInfo `json:"devices,omitempty"`
+	Kbps             int          `json:"kbps,omitempty"`
+	SessionStartedAt int64        `json:"session_started_at,omitempty"`
+	Reconnects       int          `json:"reconnects,omitempty"`
 }
 
 // DeviceInfo is a discovered Chromecast device.

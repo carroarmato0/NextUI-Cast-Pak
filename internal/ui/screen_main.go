@@ -86,6 +86,9 @@ func sessionAge(startedAt int64) string {
 		return ""
 	}
 	d := time.Since(time.Unix(startedAt, 0)).Round(time.Second)
+	if d <= 0 {
+		return ""
+	}
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}

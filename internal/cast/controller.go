@@ -402,30 +402,31 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string, restart
 		c.setState(ipc.StateStreaming, name, "")
 		// Chromecast health watchdog: if the device stops fetching segments
 		// for more than 6 s (3 × hls_time), reconnect automatically.
-		go func(hls *stream.HLSServer) {
+		watchCtx, watchCancel := context.WithCancel(ctx)
+		go func(hls *stream.HLSServer, wCtx context.Context) {
 			warmup := time.NewTimer(10 * time.Second)
 			defer warmup.Stop()
 			select {
-			case <-ctx.Done():
+			case <-wCtx.Done():
 				return
 			case <-warmup.C:
 			}
-			ticker := time.NewTicker(3 * time.Second)
-			defer ticker.Stop()
+			watchTicker := time.NewTicker(3 * time.Second)
+			defer watchTicker.Stop()
 			for {
 				select {
-				case <-ctx.Done():
+				case <-wCtx.Done():
 					return
-				case <-ticker.C:
+				case <-watchTicker.C:
 					last := hls.LastSegmentFetchAt()
 					if !last.IsZero() && time.Since(last) > 6*time.Second {
-						logger.Warn("controller: Chromecast stopped fetching segments — reconnecting")
-						go c.startPipeline(addr, name)
+						logger.Warn("controller: Chromecast %q stopped fetching segments (last fetch %v ago) — reconnecting", name, time.Since(last).Round(time.Second))
+						c.startPipeline(addr, name)
 						return
 					}
 				}
 			}
-		}(hlsSrv)
+		}(hlsSrv, watchCtx)
 		attempt = 0
 		logger.Info("controller: streaming to %s at %s", name, mediaURL)
 
@@ -434,8 +435,10 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string, restart
 		go func() { waitCh <- ffProc.Wait() }()
 		select {
 		case <-ctx.Done():
+			watchCancel()
 			return
 		case err := <-waitCh:
+			watchCancel()
 			logger.Warn("controller: ffmpeg exited: %v — reconnecting", err)
 			c.mu.Lock()
 			c.session = nil

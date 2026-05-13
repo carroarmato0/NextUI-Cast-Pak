@@ -38,6 +38,8 @@ func TestBuildArgs_LowPreset(t *testing.T) {
 	assertAbsent("-f alsa")
 	assertContains("anullsrc") // silent audio keeps Chromecast happy
 	assertContains("stream.m3u8")
+	assertContains("-hls_time 2")
+	assertContains("-hls_list_size 6")
 }
 
 func TestBuildArgs_MediumWithAudio(t *testing.T) {
@@ -99,16 +101,20 @@ func TestBuildArgs_HighPreset(t *testing.T) {
 }
 
 func TestBuildArgs_KeyframeInterval(t *testing.T) {
-	cfg := stream.FFmpegConfig{
-		Quality: "medium",
-		HLSDir:  "/tmp/cast/hls",
+	cases := []struct {
+		quality string
+		wantGOP string
+	}{
+		{"low", "-g 20"},    // 10 fps × 2 s = 20 frames
+		{"medium", "-g 30"}, // 15 fps × 2 s = 30 frames
+		{"high", "-g 30"},   // 15 fps × 2 s = 30 frames
 	}
-	args := stream.BuildArgs(cfg)
-	joined := strings.Join(args, " ")
-
-	// -g must be fps/2 so each 0.5 s HLS segment can start on a keyframe;
-	// medium is 15 fps → -g 7
-	if !strings.Contains(joined, "-g 7") {
-		t.Errorf("medium should set -g 7 (keyframe per half-second) in: %s", joined)
+	for _, tc := range cases {
+		cfg := stream.FFmpegConfig{Quality: tc.quality, HLSDir: "/tmp/cast/hls"}
+		args := stream.BuildArgs(cfg)
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, tc.wantGOP) {
+			t.Errorf("%s preset: want %q in args: %s", tc.quality, tc.wantGOP, joined)
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/carroarmato0/nextui-cast-pak/internal/stream"
 )
@@ -73,5 +74,44 @@ func TestHLSServer_SegmentMIME(t *testing.T) {
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "video/MP2T" {
 		t.Errorf("Content-Type for .ts: got %q, want %q", ct, "video/MP2T")
+	}
+}
+
+func TestHLSServer_TracksTsButNotManifest(t *testing.T) {
+	dir := t.TempDir()
+	// Create fixture files
+	if err := os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte("#EXTM3U\n"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stream0.ts"), []byte("fake-ts"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	srv := stream.NewHLSServer(dir, ":0")
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer srv.Stop()
+
+	// Before any request, LastSegmentFetchAt must be zero.
+	if !srv.LastSegmentFetchAt().IsZero() {
+		t.Error("LastSegmentFetchAt should be zero before any request")
+	}
+
+	// Fetching the manifest must NOT update the timestamp.
+	before := time.Now()
+	http.Get("http://" + srv.Addr() + "/stream.m3u8") //nolint:errcheck
+	if !srv.LastSegmentFetchAt().IsZero() {
+		t.Error("manifest fetch must not update LastSegmentFetchAt")
+	}
+
+	// Fetching a .ts segment MUST update the timestamp.
+	http.Get("http://" + srv.Addr() + "/stream0.ts") //nolint:errcheck
+	last := srv.LastSegmentFetchAt()
+	if last.IsZero() {
+		t.Error("LastSegmentFetchAt should be non-zero after .ts fetch")
+	}
+	if last.Before(before) {
+		t.Error("LastSegmentFetchAt should be >= request time")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,10 +15,21 @@ type HLSServer struct {
 	addr     string
 	listener net.Listener
 	srv      *http.Server
+
+	lastFetchMu sync.RWMutex
+	lastFetchAt time.Time
 }
 
 func NewHLSServer(dir, addr string) *HLSServer {
 	return &HLSServer{dir: dir, addr: addr}
+}
+
+// LastSegmentFetchAt returns the time a .ts segment was last served.
+// Returns zero time if no segment has been fetched yet.
+func (h *HLSServer) LastSegmentFetchAt() time.Time {
+	h.lastFetchMu.RLock()
+	defer h.lastFetchMu.RUnlock()
+	return h.lastFetchAt
 }
 
 func (h *HLSServer) Start() error {
@@ -30,19 +42,20 @@ func (h *HLSServer) Start() error {
 	}
 	h.listener = ln
 	mux := http.NewServeMux()
-	mux.Handle("/", hlsHandler(http.Dir(h.dir)))
+	mux.Handle("/", h.handler())
 	h.srv = &http.Server{Handler: mux}
 	go h.srv.Serve(ln) //nolint:errcheck
 	return nil
 }
 
-// hlsHandler wraps http.FileServer to add CORS and correct MIME types.
+// handler wraps http.FileServer to add CORS and correct MIME types.
 // The Chromecast Default Media Receiver runs in a browser sandbox — without
 // Access-Control-Allow-Origin: * it silently blocks every segment fetch.
 // Go's FileServer serves .m3u8 as text/plain; Chromecast needs the proper
 // HLS MIME type to recognise the playlist.
-func hlsHandler(root http.FileSystem) http.Handler {
-	fs := http.FileServer(root)
+// This handler also tracks when .ts segments are fetched for use in detecting stalls.
+func (h *HLSServer) handler() http.Handler {
+	fs := http.FileServer(http.Dir(h.dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -55,6 +68,9 @@ func hlsHandler(root http.FileSystem) http.Handler {
 			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		case strings.HasSuffix(r.URL.Path, ".ts"):
 			w.Header().Set("Content-Type", "video/MP2T")
+			h.lastFetchMu.Lock()
+			h.lastFetchAt = time.Now()
+			h.lastFetchMu.Unlock()
 		}
 		fs.ServeHTTP(w, r)
 	})

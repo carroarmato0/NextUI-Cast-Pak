@@ -58,9 +58,13 @@ func (a *App) Run() {
 		time.Sleep(300 * time.Millisecond)
 	}
 
+	// Seed latestState so RunMainMenu's first Load() doesn't panic on the zero value.
+	latestState.Store(menuState{})
+
 	// Register ONE unified handler for all daemon events.
 	// Per-screen handlers must not call OnEvent — each call replaces the previous
 	// callback, so a device-picker registration would silently drop state events.
+	stateReceived := make(chan struct{}, 1)
 	a.client.OnEvent(func(ev ipc.Event) {
 		switch ev.Event {
 		case ipc.EventState:
@@ -71,12 +75,24 @@ func (a *App) Run() {
 				sessionStartedAt: ev.SessionStartedAt,
 				reconnects:       ev.Reconnects,
 			})
+			select { case stateReceived <- struct{}{}: default: }
 		case ipc.EventDevices:
 			deviceCacheMu.Lock()
 			deviceCache = ev.Devices
 			deviceCacheMu.Unlock()
 		}
 	})
+
+	// Fetch the current daemon state and wait briefly so the first gaba.List call
+	// renders the correct state. Without this wait, gaba.List blocks on the first
+	// call and the CmdGetStatus response arrives too late to affect the display.
+	if a.client != nil {
+		a.client.Send(ipc.Command{Cmd: ipc.CmdGetStatus}) //nolint:errcheck
+		select {
+		case <-stateReceived:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 
 	RunMainMenu(a)
 }

@@ -26,12 +26,6 @@ var latestState atomic.Value // stores menuState
 
 // RunMainMenu runs the main menu loop until the user quits.
 func RunMainMenu(a *App) {
-	latestState.Store(menuState{state: ""})
-
-	if a.client != nil {
-		a.client.Send(ipc.Command{Cmd: ipc.CmdGetStatus}) //nolint:errcheck
-	}
-
 	for {
 		ms := latestState.Load().(menuState)
 

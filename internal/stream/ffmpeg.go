@@ -49,14 +49,14 @@ func BuildArgs(cfg FFmpegConfig) []string {
 	}
 
 	// Video encoding.
-	// -g <fps*2>: force a keyframe every 2 s to match the HLS segment target.
+	// -g <fps*1>: force a keyframe every 1 s to match the HLS segment target.
 	// Without a keyframe at each segment boundary the HLS muxer can only cut at
 	// the next available keyframe, producing longer segments than requested and
 	// adding unnecessary latency.
 	// yuv420p: the fbdev BGRA source defaults to High 4:4:4 Predictive profile
 	//   (yuv444p) which is CPU-intensive and not universally supported by
 	//   Chromecasts. Force the standard 4:2:0 chroma subsampling instead.
-	gop := p.fps * 2
+	gop := p.fps * 1
 	args = append(args,
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
@@ -80,13 +80,13 @@ func BuildArgs(cfg FFmpegConfig) []string {
 	}
 
 	// HLS output.
-	// hls_time=2: 2-second segments produce valid TARGETDURATION in the playlist.
-	// (The original 0.5 s setting caused ffmpeg to write TARGETDURATION:0, which
-	// is invalid per RFC 8216 and causes Chromecast to stall after a few seconds.)
+	// hls_time=1: 1-second segments produce valid TARGETDURATION:1 and halve
+	// end-to-end latency vs. the previous 2s setting. The original 0.5s setting
+	// caused ffmpeg to write TARGETDURATION:0 (invalid per RFC 8216).
 	manifest := filepath.Join(cfg.HLSDir, "stream.m3u8")
 	args = append(args,
 		"-f", "hls",
-		"-hls_time", "2",
+		"-hls_time", "1",
 		"-hls_list_size", "6",
 		"-hls_flags", "delete_segments+temp_file",
 		manifest,

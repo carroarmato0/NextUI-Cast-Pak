@@ -401,7 +401,7 @@ func (c *Controller) runPipeline(ctx context.Context, addr, name string, restart
 		c.mu.Unlock()
 		c.setState(ipc.StateStreaming, name, "")
 		// Chromecast health watchdog: if the device stops fetching segments
-		// for more than 6 s (3 × hls_time), reconnect automatically.
+		// for more than 6 s, reconnect automatically.
 		watchCtx, watchCancel := context.WithCancel(ctx)
 		go func(hls *stream.HLSServer, wCtx context.Context) {
 			warmup := time.NewTimer(10 * time.Second)

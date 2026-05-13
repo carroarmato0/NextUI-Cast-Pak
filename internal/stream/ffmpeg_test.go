@@ -38,7 +38,7 @@ func TestBuildArgs_LowPreset(t *testing.T) {
 	assertAbsent("-f alsa")
 	assertContains("anullsrc") // silent audio keeps Chromecast happy
 	assertContains("stream.m3u8")
-	assertContains("-hls_time 2")
+	assertContains("-hls_time 1")
 	assertContains("-hls_list_size 6")
 }
 
@@ -105,9 +105,9 @@ func TestBuildArgs_KeyframeInterval(t *testing.T) {
 		quality string
 		wantGOP string
 	}{
-		{"low", "-g 20"},    // 10 fps × 2 s = 20 frames
-		{"medium", "-g 30"}, // 15 fps × 2 s = 30 frames
-		{"high", "-g 30"},   // 15 fps × 2 s = 30 frames
+		{"low", "-g 10"},    // 10 fps × 1 s = 10 frames
+		{"medium", "-g 15"}, // 15 fps × 1 s = 15 frames
+		{"high", "-g 15"},   // 15 fps × 1 s = 15 frames
 	}
 	for _, tc := range cases {
 		cfg := stream.FFmpegConfig{Quality: tc.quality, HLSDir: "/tmp/cast/hls"}

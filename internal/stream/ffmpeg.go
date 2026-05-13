@@ -9,6 +9,11 @@ import (
 	"sync"
 )
 
+// hlsSegmentSeconds is the HLS segment duration passed to -hls_time.
+// The GOP (keyframe interval) must equal fps × hlsSegmentSeconds so that
+// each segment starts on a keyframe. Change both together.
+const hlsSegmentSeconds = 1
+
 type preset struct {
 	width, height, fps, crf, audioBitrate int
 }
@@ -49,14 +54,14 @@ func BuildArgs(cfg FFmpegConfig) []string {
 	}
 
 	// Video encoding.
-	// -g <fps*1>: force a keyframe every 1 s to match the HLS segment target.
+	// -g <fps×hlsSegmentSeconds>: force a keyframe every hlsSegmentSeconds to match the HLS segment target.
 	// Without a keyframe at each segment boundary the HLS muxer can only cut at
 	// the next available keyframe, producing longer segments than requested and
 	// adding unnecessary latency.
 	// yuv420p: the fbdev BGRA source defaults to High 4:4:4 Predictive profile
 	//   (yuv444p) which is CPU-intensive and not universally supported by
 	//   Chromecasts. Force the standard 4:2:0 chroma subsampling instead.
-	gop := p.fps * 1
+	gop := p.fps * hlsSegmentSeconds
 	args = append(args,
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
@@ -80,13 +85,14 @@ func BuildArgs(cfg FFmpegConfig) []string {
 	}
 
 	// HLS output.
-	// hls_time=1: 1-second segments produce valid TARGETDURATION:1 and halve
-	// end-to-end latency vs. the previous 2s setting. The original 0.5s setting
-	// caused ffmpeg to write TARGETDURATION:0 (invalid per RFC 8216).
+	// hls_time=hlsSegmentSeconds: segment duration must match GOP interval.
+	// 1-second segments produce valid TARGETDURATION:1 and halve end-to-end latency
+	// vs. the previous 2s setting. The original 0.5s setting caused ffmpeg to write
+	// TARGETDURATION:0 (invalid per RFC 8216).
 	manifest := filepath.Join(cfg.HLSDir, "stream.m3u8")
 	args = append(args,
 		"-f", "hls",
-		"-hls_time", "1",
+		"-hls_time", fmt.Sprintf("%d", hlsSegmentSeconds),
 		"-hls_list_size", "6",
 		"-hls_flags", "delete_segments+temp_file",
 		manifest,

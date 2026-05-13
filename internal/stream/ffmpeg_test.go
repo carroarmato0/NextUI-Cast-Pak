@@ -116,5 +116,8 @@ func TestBuildArgs_KeyframeInterval(t *testing.T) {
 		if !strings.Contains(joined, tc.wantGOP) {
 			t.Errorf("%s preset: want %q in args: %s", tc.quality, tc.wantGOP, joined)
 		}
+		if !strings.Contains(joined, "-hls_time 1") {
+			t.Errorf("%s preset: want -hls_time 1 in args: %s", tc.quality, joined)
+		}
 	}
 }

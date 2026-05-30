@@ -1,4 +1,4 @@
-/* internal/stream/cedar_encoder.c
+/* internal/stream/cedar_encoder_linux_arm64.c
  * Cedar H.264 hardware encode loop for Allwinner H618 (TrimUI devices).
  * Compiled only on linux/arm64 via CGO build constraints on the Go side.
  */
@@ -12,7 +12,6 @@
 #include <errno.h>
 #include <dlfcn.h>
 #include <time.h>
-#include <sys/mman.h>
 
 /* ── cedar_cfg_t ────────────────────────────────────────────────────────── */
 
@@ -383,7 +382,10 @@ int cedar_run(cedar_cfg_t *cfg)
 
         /* Capture framebuffer frame */
         ssize_t n = pread(fb_fd, fb_buf, fb_size, 0);
-        if (n < 0) { LOG("pread fb0: %s", strerror(errno)); goto done; }
+        if (n != (ssize_t)fb_size) {
+            LOG("pread fb0: expected %zu bytes, got %zd", fb_size, n);
+            goto done;
+        }
 
         /* Convert framebuffer to NV12 in Cedar input buffer */
         if (cfg->bpp == 16) {
@@ -409,12 +411,16 @@ int cedar_run(cedar_cfg_t *cfg)
         memset(&outbuf, 0, sizeof outbuf);
         while (p_GetOneBitstreamFrame(enc, &outbuf) == 0) {
             if (outbuf.nSize0 > 0 && outbuf.pData0) {
-                if (cedar_write_go(cfg->writer_handle, outbuf.pData0, (int)outbuf.nSize0) < 0)
+                if (cedar_write_go(cfg->writer_handle, outbuf.pData0, (int)outbuf.nSize0) < 0) {
+                    p_FreeOneBitStreamFrame(enc, &outbuf);
                     goto done;
+                }
             }
             if (outbuf.nSize1 > 0 && outbuf.pData1) {
-                if (cedar_write_go(cfg->writer_handle, outbuf.pData1, (int)outbuf.nSize1) < 0)
+                if (cedar_write_go(cfg->writer_handle, outbuf.pData1, (int)outbuf.nSize1) < 0) {
+                    p_FreeOneBitStreamFrame(enc, &outbuf);
                     goto done;
+                }
             }
             p_FreeOneBitStreamFrame(enc, &outbuf);
             memset(&outbuf, 0, sizeof outbuf);

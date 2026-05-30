@@ -188,7 +188,11 @@ int main(void)
 
     /* 3. Initialise VE hardware engine */
     LOG("VeInitialize...");
-    if (p_VeInitialize() != 0) { LOG("VeInitialize FAIL"); goto done; }
+    {
+        int ve_ret = p_VeInitialize();
+        LOG("VeInitialize returned %d (0x%x)", ve_ret, (unsigned)ve_ret);
+        if (ve_ret < 0) { LOG("VeInitialize FAIL"); goto done; }
+    }
     ve_init = 1;
     LOG("VeInitialize ok");
 

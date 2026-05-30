@@ -7,6 +7,11 @@ import (
 	"image"
 )
 
+// ErrNotSupported is returned by NewCedarEncoder when Cedar hardware is
+// unavailable — either a non-arm64 build or a device without /dev/cedar_dev
+// or the required vendor libraries.
+var ErrNotSupported = errors.New("cedar: not supported on this platform")
+
 // CedarPreset holds Cedar-specific encoder parameters for one quality level.
 type CedarPreset struct {
 	Width, Height int

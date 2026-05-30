@@ -1,5 +1,7 @@
 .PHONY: test build-native build-tg5040 build-tg5050 build-my355 build-all release deploy clean build-cedar-probe build-cedar-probe-tg5040 build-cedar-probe-tg5050 build-cedar-probe-my355
 
+_CEDAR_RT := $(or $(CONTAINER_RUNTIME),$(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker))
+
 test:
 	./scripts/test.sh
 
@@ -26,8 +28,6 @@ deploy:
 
 clean:
 	rm -rf bin/native bin/tg5040/cast bin/tg5050/cast bin/my355/cast dist/ .go_cache/
-
-_CEDAR_RT := $(or $(CONTAINER_RUNTIME),$(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker))
 
 build-cedar-probe: build-cedar-probe-tg5040 build-cedar-probe-tg5050 build-cedar-probe-my355
 

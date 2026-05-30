@@ -3,6 +3,7 @@ package stream
 
 import (
 	"errors"
+	"fmt"
 	"image"
 )
 
@@ -57,7 +58,7 @@ var cedarFixedPresets = map[string]struct{ w, h, fps, gop, kbps int }{
 // no SPS/PPS entry (only relevant for the "high" preset) or if quality is unknown.
 func CedarPresetFor(quality string, native image.Point) (CedarPreset, error) {
 	if quality == "high" {
-		w := native.X
+		w := Align16(native.X)
 		h := Align16(native.Y)
 		spspps, ok := cedarSPSPPS[[2]int{w, h}]
 		if !ok {
@@ -75,12 +76,12 @@ func CedarPresetFor(quality string, native image.Point) (CedarPreset, error) {
 
 	fp, ok := cedarFixedPresets[quality]
 	if !ok {
-		return CedarPreset{}, errors.New("cedar: unknown quality preset")
+		return CedarPreset{}, fmt.Errorf("cedar: unknown quality preset %q", quality)
 	}
 	h := Align16(fp.h)
 	spspps, ok := cedarSPSPPS[[2]int{fp.w, h}]
 	if !ok {
-		return CedarPreset{}, errors.New("cedar: no SPS/PPS entry for preset dimensions")
+		panic("cedar: SPS/PPS table and fixed presets are out of sync")
 	}
 	return CedarPreset{
 		Width:       fp.w,

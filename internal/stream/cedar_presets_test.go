@@ -55,6 +55,9 @@ func TestCedarPresetFor_Medium(t *testing.T) {
 	if p.GOP != 15 {
 		t.Errorf("medium: want GOP 15, got %d", p.GOP)
 	}
+	if p.BitrateKbps != 900 {
+		t.Errorf("medium: want 900kbps, got %d", p.BitrateKbps)
+	}
 }
 
 func TestCedarPresetFor_High_KnownResolution(t *testing.T) {
@@ -97,6 +100,23 @@ func TestCedarPresetFor_UnknownQuality(t *testing.T) {
 	_, err := stream.CedarPresetFor("bogus", image.Point{X: 1280, Y: 720})
 	if err == nil {
 		t.Error("unknown quality: expected error")
+	}
+}
+
+func TestSPSPPS_1280x720(t *testing.T) {
+	p, _ := stream.CedarPresetFor("high", image.Point{X: 1280, Y: 720})
+	want := []byte{
+		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x1f,
+		0xed, 0x00, 0xa0, 0x0b, 0x72,
+		0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
+	}
+	if len(p.SPSPPS) != len(want) {
+		t.Fatalf("1280x720 SPS/PPS: want %d bytes, got %d", len(want), len(p.SPSPPS))
+	}
+	for i, b := range want {
+		if p.SPSPPS[i] != b {
+			t.Errorf("1280x720 SPS/PPS byte[%d]: want 0x%02x, got 0x%02x", i, b, p.SPSPPS[i])
+		}
 	}
 }
 

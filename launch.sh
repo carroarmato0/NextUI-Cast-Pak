@@ -26,7 +26,7 @@ done
 unset _d
 export LD_LIBRARY_PATH="${NATIVE_SDL_LIB:+$NATIVE_SDL_LIB:}$PLATFORM_LIB:$LD_LIBRARY_PATH"
 export PATH="$PAK_DIR/bin/$PLATFORM:$PAK_DIR:$PATH"
-mkdir -p "$HOME" /tmp/cast/hls
+mkdir -p "$HOME" /tmp/cast
 
 # Start daemon if not already running
 PID_FILE="/tmp/cast/daemon.pid"

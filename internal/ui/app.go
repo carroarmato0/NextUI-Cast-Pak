@@ -75,11 +75,31 @@ func (a *App) Run() {
 				sessionStartedAt: ev.SessionStartedAt,
 				reconnects:       ev.Reconnects,
 			})
-			select { case stateReceived <- struct{}{}: default: }
-		case ipc.EventDevices:
-			deviceCacheMu.Lock()
-			deviceCache = ev.Devices
-			deviceCacheMu.Unlock()
+			select {
+			case stateReceived <- struct{}{}:
+			default:
+			}
+		case ipc.EventBitrate:
+			current := latestState.Load().(menuState)
+			now := time.Now()
+			if ev.Connected {
+				current.connected = true
+				current.lastConnectedAt = now
+			} else if current.connected && !current.lastConnectedAt.IsZero() && now.Sub(current.lastConnectedAt) < 2*time.Second {
+				// Keep the UI stable across very brief transport stalls.
+				current.connected = true
+			} else {
+				current.connected = false
+			}
+			current.kbps = ev.Kbps
+			if ev.Kbps > 0 {
+				current.lastNonZeroKbps = ev.Kbps
+				current.lastNonZeroKbpsAt = now
+			}
+			current.lastClientAddr = ev.LastClientAddr
+			current.ffmpegStartMs = ev.FFmpegStartMs
+			current.firstByteMs = ev.FirstByteMs
+			latestState.Store(current)
 		}
 	})
 	defer a.client.Close()

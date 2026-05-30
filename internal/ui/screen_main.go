@@ -4,75 +4,34 @@ package ui
 
 import (
 	"fmt"
-	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
 	"github.com/carroarmato0/nextui-cast-pak/internal/ipc"
-	"github.com/carroarmato0/nextui-cast-pak/internal/logger"
-	"github.com/carroarmato0/nextui-cast-pak/internal/wifi"
 )
 
 type menuState struct {
-	state            string
-	deviceName       string
-	errMsg           string
-	sessionStartedAt int64
-	reconnects       int
+	state             string
+	deviceName        string
+	errMsg            string
+	connected         bool
+	lastClientAddr    string
+	kbps              int
+	ffmpegStartMs     int
+	firstByteMs       int
+	sessionStartedAt  int64
+	reconnects        int
+	lastConnectedAt   time.Time
+	lastNonZeroKbps   int
+	lastNonZeroKbpsAt time.Time
 }
 
-var latestState atomic.Value // stores menuState
+var latestState atomic.Value
 
-// RunMainMenu runs the main menu loop until the user quits.
 func RunMainMenu(a *App) {
-	for {
-		ms := latestState.Load().(menuState)
-
-		// Re-check WiFi on each menu redraw
-		if !wifi.HasWiFi(nil, nil) {
-			logger.Warn("ui: WiFi lost on menu redraw")
-			gaba.ConfirmationMessage( //nolint:errcheck
-				"WiFi is not connected.\nEnable WiFi before using Cast.",
-				nil,
-				gaba.MessageOptions{},
-			)
-			return
-		}
-
-		statusText := statusPill(ms)
-		items := menuItems(ms)
-
-		result, err := gaba.List(gaba.DefaultListOptions(statusText, items))
-		if err == gaba.ErrCancelled {
-			return
-		}
-		if err != nil {
-			return
-		}
-
-		if len(result.Selected) == 0 {
-			continue
-		}
-
-		action := items[result.Selected[0]].Text
-		switch action {
-		case "Select Device", "Change Device":
-			RunDevicePicker(a)
-		case "Start Casting":
-			if a.client != nil {
-				a.client.Send(ipc.Command{Cmd: ipc.CmdStart}) //nolint:errcheck
-			}
-		case "Stop", "Stop Casting":
-			if a.client != nil {
-				a.client.Send(ipc.Command{Cmd: ipc.CmdStop}) //nolint:errcheck
-			}
-		case "Settings":
-			RunSettings(a)
-		case "Quit":
-			return
-		}
-	}
+	runSplitMainMenu(a)
 }
 
 func sessionAge(startedAt int64) string {
@@ -95,23 +54,35 @@ func statusPill(ms menuState) string {
 	case "":
 		return "○ Service not running"
 	case ipc.StateIdle:
-		if ms.deviceName != "" {
-			return "○ Ready  —  " + ms.deviceName
-		}
-		return "○ Ready"
+		return "○ DLNA Server: Disabled\nReady to start."
 	case ipc.StateStreaming:
-		line2 := age + "  ·  Reconnects: " + strconv.Itoa(ms.reconnects)
-		return "● Casting to " + ms.deviceName + "\n" + line2
-	case ipc.StateReconnecting:
-		line2 := fmt.Sprintf("Attempt %d", ms.reconnects+1)
+		addr := "http://" + ms.deviceName + "/description.xml"
+		line := "● DLNA Server: Enabled & Running\nAddress: " + addr
 		if age != "" {
-			line2 += "  ·  Session: " + age
+			line += "\nUp Time: " + age
 		}
-		return "◌ Reconnecting to " + ms.deviceName + "…\n" + line2
-	case ipc.StateConnecting:
-		return "◌ Connecting to " + ms.deviceName + "…"
-	case ipc.StateScanning:
-		return "◌ Scanning for devices…"
+		metrics := make([]string, 0, 4)
+		if ms.connected {
+			metrics = append(metrics, "Client: connected")
+		} else {
+			metrics = append(metrics, "Client: waiting")
+		}
+		if ms.lastClientAddr != "" {
+			metrics = append(metrics, "Last: "+ms.lastClientAddr)
+		}
+		if ms.kbps > 0 {
+			metrics = append(metrics, fmt.Sprintf("Rate: %d kbps", ms.kbps))
+		}
+		if ms.ffmpegStartMs > 0 {
+			metrics = append(metrics, fmt.Sprintf("FFmpeg: %d ms", ms.ffmpegStartMs))
+		}
+		if ms.firstByteMs > 0 {
+			metrics = append(metrics, fmt.Sprintf("First byte: %d ms", ms.firstByteMs))
+		}
+		if len(metrics) > 0 {
+			line += "\n" + strings.Join(metrics, " | ")
+		}
+		return line
 	case ipc.StateError:
 		pill := "⚠ " + ms.errMsg
 		if age != "" {
@@ -127,34 +98,13 @@ func menuItems(ms menuState) []gaba.MenuItem {
 	switch ms.state {
 	case ipc.StateStreaming:
 		return []gaba.MenuItem{
-			{Text: "Stop Casting"},
-			{Text: "Change Device"},
-			{Text: "Settings"},
-			{Text: "Quit"},
-		}
-	case ipc.StateReconnecting:
-		return []gaba.MenuItem{
-			{Text: "Stop"},
-			{Text: "Change Device"},
-			{Text: "Quit"},
-		}
-	case ipc.StateScanning, ipc.StateConnecting:
-		return []gaba.MenuItem{
-			{Text: "Stop"},
+			{Text: "Disable DLNA Server"},
 			{Text: "Settings"},
 			{Text: "Quit"},
 		}
 	default:
-		if ms.deviceName != "" {
-			return []gaba.MenuItem{
-				{Text: "Start Casting"},
-				{Text: "Change Device"},
-				{Text: "Settings"},
-				{Text: "Quit"},
-			}
-		}
 		return []gaba.MenuItem{
-			{Text: "Select Device"},
+			{Text: "Enable DLNA Server"},
 			{Text: "Settings"},
 			{Text: "Quit"},
 		}

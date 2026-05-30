@@ -3,7 +3,7 @@
 # CGo builds pick up the device-native SDL2 from the toolchain sysroot rather
 # than the Debian desktop SDL2.  Supported PLATFORM values: tg5040, tg5050, my355.
 ARG PLATFORM=tg5040
-FROM docker.io/golang:1.22-alpine AS golang
+FROM docker.io/golang:1.24-alpine AS golang
 FROM ghcr.io/loveretro/${PLATFORM}-toolchain:latest
 COPY --from=golang /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH

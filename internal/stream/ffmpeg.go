@@ -3,25 +3,23 @@ package stream
 import (
 	"fmt"
 	"image"
+	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 )
 
-// hlsSegmentSeconds is the HLS segment duration passed to -hls_time.
-// The GOP (keyframe interval) must equal fps × hlsSegmentSeconds so that
-// each segment starts on a keyframe. Change both together.
-const hlsSegmentSeconds = 1
-
 type preset struct {
-	width, height, fps, crf, audioBitrate int
+	width, height, fps, bitrate, audioBitrate int
 }
 
 var presets = map[string]preset{
-	"low":    {640, 480, 10, 35, 64},
-	"medium": {640, 480, 15, 28, 128}, // scale down to reduce ARM encoding cost
-	"high":   {0, 0, 15, 23, 192},     // native resolution
+	"low":    {480, 270, 15, 500, 64},
+	"medium": {640, 360, 30, 900, 96},
+	"high":   {0, 0, 30, 1500, 128},
+	// Ultra trades bandwidth for minimum decoder reordering and the fastest
+	// possible frame availability on clients that struggle with buffering.
+	"ultra": {480, 270, 15, 1200, 64},
 }
 
 type FFmpegConfig struct {
@@ -29,7 +27,6 @@ type FFmpegConfig struct {
 	Audio      bool
 	ALSADevice string
 	Resolution image.Point
-	HLSDir     string
 }
 
 func BuildArgs(cfg FFmpegConfig) []string {
@@ -40,65 +37,100 @@ func BuildArgs(cfg FFmpegConfig) []string {
 
 	var args []string
 
-	// Video input
+	// Aggressive low-latency tuning for live screen mirroring.
+	args = append(args,
+		"-fflags", "nobuffer",
+		"-flags", "low_delay",
+		"-max_delay", "0",
+	)
+
+	// Input video: frame buffer
 	args = append(args, "-f", "fbdev", "-framerate", fmt.Sprintf("%d", p.fps), "-i", "/dev/fb0")
 
-	// Audio input: use the real ALSA capture when available; otherwise feed silence
-	// via anullsrc. Chromecast's default receiver may reject video-only HLS streams,
-	// so we always include an audio track even when the user has disabled audio.
+	// Input audio: ALSA or silence
 	useRealAudio := cfg.Audio && cfg.ALSADevice != ""
 	if useRealAudio {
 		args = append(args, "-f", "alsa", "-i", cfg.ALSADevice)
 	} else {
-		args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100")
+		args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000")
 	}
 
-	// Video encoding.
-	// -g <fps×hlsSegmentSeconds>: force a keyframe every hlsSegmentSeconds to match the HLS segment target.
-	// Without a keyframe at each segment boundary the HLS muxer can only cut at
-	// the next available keyframe, producing longer segments than requested and
-	// adding unnecessary latency.
-	// yuv420p: the fbdev BGRA source defaults to High 4:4:4 Predictive profile
-	//   (yuv444p) which is CPU-intensive and not universally supported by
-	//   Chromecasts. Force the standard 4:2:0 chroma subsampling instead.
-	gop := p.fps * hlsSegmentSeconds
+	// H.264 with ultra-low-latency tuning tends to start faster and is much
+	// easier for mobile clients to buffer efficiently than MPEG-2.
+	gop := max(1, p.fps/2) // half-second keyframe interval
+	if cfg.Quality == "ultra" {
+		gop = 1 // all-I frames: maximize decoder immediacy at the cost of bitrate.
+	}
 	args = append(args,
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
 		"-tune", "zerolatency",
-		"-crf", fmt.Sprintf("%d", p.crf),
+		"-profile:v", "baseline",
+		"-level", "3.1",
+		"-pix_fmt", "yuv420p",
+		"-bf", "0",
 		"-g", fmt.Sprintf("%d", gop),
+		"-keyint_min", fmt.Sprintf("%d", gop),
+		"-sc_threshold", "0",
+		"-x264-params", fmt.Sprintf("keyint=%d:min-keyint=%d:scenecut=0:rc-lookahead=0:repeat-headers=1:aud=1", gop, gop),
+		"-b:v", fmt.Sprintf("%dk", p.bitrate),
+		"-maxrate", fmt.Sprintf("%dk", p.bitrate),
+		"-bufsize", fmt.Sprintf("%dk", p.bitrate*2),
 	)
 
-	// Scale + pixel-format filter
+	// Video filters
 	if p.width > 0 && p.height > 0 {
-		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d,format=yuv420p", p.width, p.height))
-	} else {
-		args = append(args, "-vf", "format=yuv420p")
+		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d", p.width, p.height))
 	}
 
-	// Audio encoding
-	if useRealAudio {
-		args = append(args, "-c:a", "aac", "-b:a", fmt.Sprintf("%dk", p.audioBitrate))
-	} else {
-		args = append(args, "-c:a", "aac", "-b:a", "32k")
-	}
-
-	// HLS output.
-	// hls_time=hlsSegmentSeconds: segment duration must match GOP interval.
-	// 1-second segments produce valid TARGETDURATION:1 and halve end-to-end latency
-	// vs. the previous 2s setting. The original 0.5s setting caused ffmpeg to write
-	// TARGETDURATION:0 (invalid per RFC 8216).
-	manifest := filepath.Join(cfg.HLSDir, "stream.m3u8")
+	// AAC is widely compatible and buffers efficiently in mobile players.
 	args = append(args,
-		"-f", "hls",
-		"-hls_time", fmt.Sprintf("%d", hlsSegmentSeconds),
-		"-hls_list_size", "6",
-		"-hls_flags", "delete_segments+temp_file",
-		manifest,
+		"-c:a", "aac",
+		"-b:a", fmt.Sprintf("%dk", p.audioBitrate),
+		"-ar", "48000",
+		"-ac", "2",
+	)
+
+	// Output format: MPEG-TS over pipe
+	args = append(args,
+		"-f", "mpegts",
+		"-fflags", "nobuffer",
+		"-flush_packets", "1",
+		"-muxdelay", "0",
+		"-muxpreload", "0",
+		"-max_interleave_delta", "0",
+		"-mpegts_flags", "resend_headers+initial_discontinuity",
+		"pipe:1",
 	)
 
 	return args
+}
+
+// NewFFmpegEncoder returns the current software encoder backend.
+//
+// This is intentionally a small, transport-agnostic constructor so the same
+// interface can later be backed by Cedar or another hardware path without
+// rewriting the server layer.
+func NewFFmpegEncoder(cfg FFmpegConfig) Encoder {
+	return NewExecCmdEncoder("ffmpeg", func() (*exec.Cmd, error) {
+		return exec.Command("ffmpeg", append([]string{"-y"}, BuildArgs(cfg)...)...), nil
+	})
+}
+
+// NewEncoder is the transport-level factory for the stream backend.
+//
+// It currently returns the FFmpeg software path, but the selection point is
+// intentionally centralized here so a Cedar backend can be added later
+// without changing the controller or UI plumbing.
+func NewEncoder(cfg FFmpegConfig) (Encoder, error) {
+	return NewFFmpegEncoder(cfg), nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 type Process struct {
@@ -106,31 +138,41 @@ type Process struct {
 	cmd *exec.Cmd
 }
 
-func (p *Process) Start(hlsDir string, args []string) error {
-	// Stop any previously running process before starting a new one.
+func (p *Process) Start(args []string, writer io.Writer) error {
 	p.Stop()
-	if err := os.MkdirAll(hlsDir, 0755); err != nil {
-		return fmt.Errorf("create HLS dir: %w", err)
-	}
+
 	cmd := exec.Command("ffmpeg", append([]string{"-y"}, args...)...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
 	cmd.Stderr = os.Stderr
+
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+
 	p.mu.Lock()
 	p.cmd = cmd
 	p.mu.Unlock()
+
+	go func() {
+		buf := make([]byte, 32*1024)
+		_, _ = io.CopyBuffer(writer, stdout, buf)
+		p.Stop()
+	}()
+
 	return nil
 }
 
 func (p *Process) Stop() {
 	p.mu.Lock()
 	cmd := p.cmd
-	p.cmd = nil // nil out so Wait() sees no process and returns nil
+	p.cmd = nil
 	p.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		cmd.Process.Kill()
-		cmd.Wait() // reap; ignore error (process may have already exited)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	}
 }
 

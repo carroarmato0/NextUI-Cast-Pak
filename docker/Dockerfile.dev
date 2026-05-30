@@ -1,7 +1,7 @@
 # Bullseye (glibc 2.31) keeps GLIBC_2.34 pthread symbols out of the binary,
 # ensuring compatibility with TrimUI/Miyoo devices that ship glibc 2.33.
-FROM docker.io/golang:1.22-bullseye
-ENV GOTOOLCHAIN=local
+FROM docker.io/golang:1.24-bullseye
+ENV GOTOOLCHAIN=auto
 RUN dpkg --add-architecture arm64 && \
     apt-get update && apt-get install -y \
     libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev \

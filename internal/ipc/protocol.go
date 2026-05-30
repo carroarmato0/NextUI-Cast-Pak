@@ -9,6 +9,7 @@ const (
 	CmdSetAudio       = "set-audio"
 	CmdRefreshDevices = "refresh-devices"
 	CmdGetStatus      = "get-status"
+	CmdSetLogLevel    = "set-log-level"
 )
 
 // Event types pushed daemon→UI.
@@ -35,6 +36,7 @@ type Command struct {
 	DeviceName string `json:"device_name,omitempty"`
 	Quality    string `json:"quality,omitempty"`
 	Audio      *bool  `json:"audio,omitempty"`
+	LogLevel   string `json:"log_level,omitempty"`
 }
 
 // Event is a daemon→UI push message.
@@ -45,11 +47,16 @@ type Event struct {
 	Error            string       `json:"error,omitempty"`
 	Devices          []DeviceInfo `json:"devices,omitempty"`
 	Kbps             int          `json:"kbps,omitempty"`
+	Connected        bool         `json:"connected,omitempty"`
+	LastClientAddr   string       `json:"last_client_addr,omitempty"`
+	EncoderName      string       `json:"encoder_name,omitempty"`
+	FFmpegStartMs    int          `json:"ffmpeg_start_ms,omitempty"`
+	FirstByteMs      int          `json:"first_byte_ms,omitempty"`
 	SessionStartedAt int64        `json:"session_started_at,omitempty"`
 	Reconnects       int          `json:"reconnects,omitempty"`
 }
 
-// DeviceInfo is a discovered Chromecast device.
+// DeviceInfo is a discovered DLNA device.
 type DeviceInfo struct {
 	Name  string `json:"name"`
 	Addr  string `json:"addr"`

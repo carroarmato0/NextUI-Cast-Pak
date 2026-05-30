@@ -2,7 +2,7 @@
   "name": "Cast",
   "version": "v0.1.0",
   "type": "TOOL",
-  "description": "Cast your device screen to a Chromecast or Google TV over WiFi.",
+  "description": "Cast your device screen using DLNA with ultra low latency.",
   "author": "Carroarmato0",
   "repo_url": "https://github.com/carroarmato0/NextUI-Cast-Pak",
   "release_filename": "Cast.pak.zip",

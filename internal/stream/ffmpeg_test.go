@@ -14,7 +14,6 @@ func TestBuildArgs_LowPreset(t *testing.T) {
 		Quality:    "low",
 		Audio:      false,
 		Resolution: image.Point{X: 1280, Y: 720},
-		HLSDir:     "/tmp/cast/hls",
 	}
 	args := stream.BuildArgs(cfg)
 	joined := strings.Join(args, " ")
@@ -32,14 +31,19 @@ func TestBuildArgs_LowPreset(t *testing.T) {
 		}
 	}
 
-	assertContains("-framerate 10")
-	assertContains("crf 35")
-	assertContains("scale=640:480")
+	assertContains("-framerate 15")
+	assertContains("-fflags nobuffer")
+	assertContains("-c:v libx264")
+	assertContains("-preset ultrafast")
+	assertContains("-tune zerolatency")
+	assertContains("-profile:v baseline")
+	assertContains("scale=480:270")
 	assertAbsent("-f alsa")
-	assertContains("anullsrc") // silent audio keeps Chromecast happy
-	assertContains("stream.m3u8")
-	assertContains("-hls_time 1")
-	assertContains("-hls_list_size 6")
+	assertContains("anullsrc")
+	assertContains("-f mpegts")
+	assertContains("-flush_packets 1")
+	assertContains("-mpegts_flags resend_headers+initial_discontinuity")
+	assertContains("pipe:1")
 }
 
 func TestBuildArgs_MediumWithAudio(t *testing.T) {
@@ -48,7 +52,6 @@ func TestBuildArgs_MediumWithAudio(t *testing.T) {
 		Audio:      true,
 		ALSADevice: "hw:0,0",
 		Resolution: image.Point{X: 1280, Y: 720},
-		HLSDir:     "/tmp/cast/hls",
 	}
 	args := stream.BuildArgs(cfg)
 	joined := strings.Join(args, " ")
@@ -59,15 +62,23 @@ func TestBuildArgs_MediumWithAudio(t *testing.T) {
 	if !strings.Contains(joined, "hw:0,0") {
 		t.Error("should include ALSA device")
 	}
-	if !strings.Contains(joined, "-framerate 15") {
-		t.Error("medium should be 15 fps")
+	if !strings.Contains(joined, "-framerate 30") {
+		t.Error("medium should be 30 fps")
 	}
-	// medium now scales to 640x480 to reduce ARM encoding cost
-	if !strings.Contains(joined, "scale=640:480") {
-		t.Error("medium should scale to 640x480")
+	if !strings.Contains(joined, "scale=640:360") {
+		t.Error("medium should scale to 640x360")
 	}
 	if !strings.Contains(joined, "yuv420p") {
 		t.Error("medium should force yuv420p pixel format")
+	}
+	if !strings.Contains(joined, "-c:v libx264") {
+		t.Error("should use libx264 video codec")
+	}
+	if !strings.Contains(joined, "-c:a aac") {
+		t.Error("should use aac audio codec")
+	}
+	if !strings.Contains(joined, "-f mpegts") {
+		t.Error("should output mpegts")
 	}
 }
 
@@ -77,21 +88,19 @@ func TestBuildArgs_HighPreset(t *testing.T) {
 		Audio:      true,
 		ALSADevice: "default",
 		Resolution: image.Point{X: 1280, Y: 720},
-		HLSDir:     "/tmp/cast/hls",
 	}
 	args := stream.BuildArgs(cfg)
 	joined := strings.Join(args, " ")
 
-	if !strings.Contains(joined, "-framerate 15") {
-		t.Error("high should be 15 fps")
+	if !strings.Contains(joined, "-framerate 30") {
+		t.Error("high should be 30 fps")
 	}
-	if !strings.Contains(joined, "crf 23") {
-		t.Error("high CRF should be 23")
+	if !strings.Contains(joined, "-preset ultrafast") {
+		t.Error("high should use ultrafast preset")
 	}
-	if !strings.Contains(joined, "192k") {
-		t.Error("high audio should be 192k")
+	if !strings.Contains(joined, "128k") {
+		t.Error("high audio should be 128k")
 	}
-	// high runs at native resolution — no scale filter, but still yuv420p
 	if strings.Contains(joined, "scale=") {
 		t.Error("high preset should not scale (native resolution)")
 	}
@@ -100,24 +109,52 @@ func TestBuildArgs_HighPreset(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_UltraPreset(t *testing.T) {
+	cfg := stream.FFmpegConfig{
+		Quality:    "ultra",
+		Audio:      true,
+		ALSADevice: "default",
+		Resolution: image.Point{X: 1280, Y: 720},
+	}
+	args := stream.BuildArgs(cfg)
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "-framerate 15") {
+		t.Error("ultra should be 15 fps")
+	}
+	if !strings.Contains(joined, "scale=480:270") {
+		t.Error("ultra should scale to 480x270")
+	}
+	if !strings.Contains(joined, "-g 1") {
+		t.Error("ultra should use all-I frames with GOP 1")
+	}
+	if !strings.Contains(joined, "keyint=1:min-keyint=1:scenecut=0") {
+		t.Error("ultra should force x264 all-I settings")
+	}
+	if !strings.Contains(joined, "-b:v 1200k") {
+		t.Error("ultra should use 1200k video bitrate")
+	}
+	if !strings.Contains(joined, "-c:a aac") {
+		t.Error("ultra should still use aac audio")
+	}
+}
+
 func TestBuildArgs_KeyframeInterval(t *testing.T) {
 	cases := []struct {
 		quality string
 		wantGOP string
 	}{
-		{"low", "-g 10"},    // 10 fps × 1 s = 10 frames
-		{"medium", "-g 15"}, // 15 fps × 1 s = 15 frames
-		{"high", "-g 15"},   // 15 fps × 1 s = 15 frames
+		{"low", "-g 7"},    // 15 fps × 0.5 s ≈ 7 frames
+		{"medium", "-g 15"}, // 30 fps × 0.5 s = 15 frames
+		{"high", "-g 15"},   // 30 fps × 0.5 s = 15 frames
+		{"ultra", "-g 1"},   // all-I frames for minimal latency
 	}
 	for _, tc := range cases {
-		cfg := stream.FFmpegConfig{Quality: tc.quality, HLSDir: "/tmp/cast/hls"}
+		cfg := stream.FFmpegConfig{Quality: tc.quality}
 		args := stream.BuildArgs(cfg)
 		joined := strings.Join(args, " ")
 		if !strings.Contains(joined, tc.wantGOP) {
 			t.Errorf("%s preset: want %q in args: %s", tc.quality, tc.wantGOP, joined)
-		}
-		if !strings.Contains(joined, "-hls_time 1") {
-			t.Errorf("%s preset: want -hls_time 1 in args: %s", tc.quality, joined)
 		}
 	}
 }

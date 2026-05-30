@@ -254,6 +254,7 @@ int main(void)
         LOG("GetOneBitstreamFrame FAIL");
         goto done;
     }
+    LOG("GetOneBitstreamFrame ok");
 
     /* 11. Write Annex B H.264 to file */
     {

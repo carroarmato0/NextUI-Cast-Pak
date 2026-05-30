@@ -14,20 +14,53 @@
 /* ── CedarC v1.3.0 type definitions ────────────────────────────────────── */
 
 typedef enum { VENC_CODEC_H264    = 0 } VENC_CODEC_TYPE;
-typedef enum { VENC_PIXEL_YUV420SP = 1 } VENC_PIXEL_FMT;
+typedef enum { VENC_PIXEL_YUV420SP = 0 } VENC_PIXEL_FMT;  /* 0 = first enum value */
 typedef struct VideoEncoder VideoEncoder;
 
+/* ScMemOpsS layout from sc_interface.h (needed to call open2 before first use) */
+typedef struct ScMemOpsS {
+    int   (*open)(void);
+    int   (*open2)(void *, void *);
+    void  (*close)(void);
+    int   (*total_size)(void);
+    void *(*palloc)(int, void *, void *);
+    void *(*palloc_no_cache)(int, void *, void *);
+    void  (*pfree)(void *, void *, void *);
+    void  (*flush_cache)(void *, int);
+    void *(*ve_get_phyaddr)(void *);
+    void *(*ve_get_viraddr)(void *);
+    void *(*cpu_get_phyaddr)(void *);
+    void *(*cpu_get_viraddr)(void *);
+    int   (*mem_set)(void *, int, size_t);
+    int   (*mem_cpy)(void *, void *, size_t);
+    int   (*mem_read)(void *, void *, size_t);
+    int   (*mem_write)(void *, void *, size_t);
+    int   (*setup)(void);
+    int   (*shutdown)(void);
+    unsigned int (*get_ve_addr_offset)(void);
+    int   (*get_debug_info)(char *, int);
+    void *(*get_vir_by_fd)(int);
+    int   (*get_phy_by_fd)(int, void *);
+    int   (*free_phy_by_fd)(int, unsigned long);
+    int   (*get_fd_by_vir)(void *);
+} ScMemOpsS;
+
+/* Matches CedarC v1.3.0 vencoder.h VencBaseConfig exactly */
 typedef struct {
-    unsigned int   nInputWidth;
-    unsigned int   nInputHeight;
-    unsigned int   nStride;
-    unsigned int   nDstWidth;
-    unsigned int   nDstHeight;
-    VENC_PIXEL_FMT eInputFormat;
-    void          *pMemops;
-    void          *pVeops;
-    int            nSocId;
-    unsigned int   nDspBufNum;
+    unsigned char   bEncH264Nalu;
+    unsigned int    nInputWidth;
+    unsigned int    nInputHeight;
+    unsigned int    nDstWidth;
+    unsigned int    nDstHeight;
+    unsigned int    nStride;
+    VENC_PIXEL_FMT  eInputFormat;
+    void           *memops;     /* struct ScMemOpsS* — from MemAdapterGetOpsS() */
+    void           *veOpsS;     /* VeOpsS*            — from GetVeOpsS(0) */
+    void           *pVeOpsSelf; /* self handle         — pass NULL */
+    unsigned char   bOnlyWbFlag;
+    unsigned char   bLbcLossyComEnFlag2x;
+    unsigned char   bLbcLossyComEnFlag2_5x;
+    unsigned char   bIsVbvNoCache;
 } VencBaseConfig;
 
 typedef struct {
@@ -63,6 +96,12 @@ typedef VideoEncoder *(*fn_VideoEncCreate)(VENC_CODEC_TYPE);
 typedef int  (*fn_VideoEncInit)(VideoEncoder *, VencBaseConfig *);
 typedef void (*fn_VideoEncUnInit)(VideoEncoder *);
 typedef void (*fn_VideoEncDestroy)(VideoEncoder *);
+typedef struct {
+    unsigned int nBufferNum;
+    unsigned int nSizeY;
+    unsigned int nSizeC;
+} VencAllocateBufferParam;
+typedef int  (*fn_AllocInputBuffer)(VideoEncoder *, VencAllocateBufferParam *);
 typedef int  (*fn_GetOneAllocInputBuffer)(VideoEncoder *, VencInputBuffer *);
 typedef int  (*fn_FlushCacheAllocInputBuffer)(VideoEncoder *, VencInputBuffer *);
 typedef int  (*fn_ReturnOneAllocInputBuffer)(VideoEncoder *, VencInputBuffer *);
@@ -72,9 +111,8 @@ typedef int  (*fn_VideoEncodeOneFrame)(VideoEncoder *);
 typedef int  (*fn_ValidBitstreamFrameNum)(VideoEncoder *);
 typedef int  (*fn_GetOneBitstreamFrame)(VideoEncoder *, VencOutputBuffer *);
 typedef int  (*fn_FreeOneBitStreamFrame)(VideoEncoder *, VencOutputBuffer *);
+typedef void *(*fn_GetVeOpsS_t)(int type);
 typedef void *(*fn_GetOpsS)(void);
-typedef int  (*fn_VeInitialize)(void);
-typedef void (*fn_VeRelease)(void);
 
 /* ── Library handles ────────────────────────────────────────────────────── */
 
@@ -86,6 +124,7 @@ static fn_VideoEncCreate             p_VideoEncCreate;
 static fn_VideoEncInit               p_VideoEncInit;
 static fn_VideoEncUnInit             p_VideoEncUnInit;
 static fn_VideoEncDestroy            p_VideoEncDestroy;
+static fn_AllocInputBuffer           p_AllocInputBuffer;
 static fn_GetOneAllocInputBuffer     p_GetOneAllocInputBuffer;
 static fn_FlushCacheAllocInputBuffer p_FlushCacheAllocInputBuffer;
 static fn_ReturnOneAllocInputBuffer  p_ReturnOneAllocInputBuffer;
@@ -96,9 +135,7 @@ static fn_ValidBitstreamFrameNum     p_ValidBitstreamFrameNum;
 static fn_GetOneBitstreamFrame       p_GetOneBitstreamFrame;
 static fn_FreeOneBitStreamFrame      p_FreeOneBitStreamFrame;
 static fn_GetOpsS                    p_MemAdapterGetOpsS;
-static fn_GetOpsS                    p_GetVeOpsS;
-static fn_VeInitialize               p_VeInitialize;
-static fn_VeRelease                  p_VeRelease;
+static fn_GetVeOpsS_t                p_GetVeOpsS;
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
@@ -123,14 +160,13 @@ static int load_symbols(void)
     if (!g_libvenc) { LOG("dlopen(libvencoder.so): %s", dlerror()); return -1; }
     LOG("libvencoder.so loaded");
 
-    LOADSYM(g_libVE,   p_VeInitialize,              "VeInitialize");
-    LOADSYM(g_libVE,   p_VeRelease,                 "VeRelease");
     LOADSYM(g_libVE,   p_GetVeOpsS,                 "GetVeOpsS");
     LOADSYM(g_libMem,  p_MemAdapterGetOpsS,          "MemAdapterGetOpsS");
     LOADSYM(g_libvenc, p_VideoEncCreate,             "VideoEncCreate");
     LOADSYM(g_libvenc, p_VideoEncInit,               "VideoEncInit");
     LOADSYM(g_libvenc, p_VideoEncUnInit,             "VideoEncUnInit");
     LOADSYM(g_libvenc, p_VideoEncDestroy,            "VideoEncDestroy");
+    LOADSYM(g_libvenc, p_AllocInputBuffer,           "AllocInputBuffer");
     LOADSYM(g_libvenc, p_GetOneAllocInputBuffer,     "GetOneAllocInputBuffer");
     LOADSYM(g_libvenc, p_FlushCacheAllocInputBuffer, "FlushCacheAllocInputBuffer");
     LOADSYM(g_libvenc, p_ReturnOneAllocInputBuffer,  "ReturnOneAllocInputBuffer");
@@ -163,9 +199,12 @@ static void fill_nv12(unsigned char *y, unsigned char *uv,
 int main(void)
 {
     int ret       = 1;
-    int ve_init   = 0;
     int enc_init  = 0;
-    int buf_alloc = 0;
+    int buf_alloc = 0; /* AllocInputBuffer pool created */
+    int buf_got   = 0; /* GetOneAllocInputBuffer in hand */
+    int mem_open  = 0; /* CdcMemOpen2 called */
+    ScMemOpsS       *memops = NULL;
+    void            *veops  = NULL;
     VideoEncoder    *enc = NULL;
     VencInputBuffer  inbuf;
     VencOutputBuffer outbuf;
@@ -186,15 +225,22 @@ int main(void)
     /* 2. Load libraries and resolve all symbols */
     if (load_symbols() != 0) goto done;
 
-    /* 3. Initialise VE hardware engine */
-    LOG("VeInitialize...");
+    /* 3. Resolve ops structs and open the memory adapter */
+    veops  = p_GetVeOpsS(0);
+    memops = (ScMemOpsS *)p_MemAdapterGetOpsS();
+    if (!veops || !memops) { LOG("GetVeOpsS/MemAdapterGetOpsS FAIL"); goto done; }
+    LOG("ops ok (veops=%p memops=%p)", veops, memops);
+    LOG("memops->open = %p, open2 = %p", (void*)memops->open, (void*)memops->open2);
     {
-        int ve_ret = p_VeInitialize();
-        LOG("VeInitialize returned %d (0x%x)", ve_ret, (unsigned)ve_ret);
-        if (ve_ret < 0) { LOG("VeInitialize FAIL"); goto done; }
+        int r = memops->open();
+        LOG("CdcMemOpen returned %d", r);
+        if (r < 0) { LOG("CdcMemOpen FAIL"); goto done; }
     }
-    ve_init = 1;
-    LOG("VeInitialize ok");
+    mem_open = 1;
+    LOG("CdcMemOpen ok");
+
+    /* VeInitialize is called internally by VideoEncCreate; do not call it
+     * explicitly or the reference count will be off and VeRelease will segfault. */
 
     /* 4. Create H.264 encoder handle */
     LOG("VideoEncCreate(H264)...");
@@ -213,23 +259,40 @@ int main(void)
         cfg.nDstWidth    = 480;
         cfg.nDstHeight   = 272;
         cfg.eInputFormat = VENC_PIXEL_YUV420SP;
-        cfg.pMemops      = p_MemAdapterGetOpsS();
-        cfg.pVeops       = p_GetVeOpsS();
+        cfg.memops       = memops;
+        cfg.veOpsS       = veops;
+        cfg.pVeOpsSelf   = NULL;
         if (p_VideoEncInit(enc, &cfg) != 0) { LOG("VideoEncInit FAIL"); goto done; }
     }
     enc_init = 1;
     LOG("VideoEncInit ok");
 
-    /* 6. Allocate an ION-backed input buffer */
+    /* 6. Allocate the ION-backed input buffer pool (must precede GetOneAllocInputBuffer) */
+    LOG("AllocInputBuffer...");
+    {
+        VencAllocateBufferParam bufparam;
+        memset(&bufparam, 0, sizeof bufparam);
+        bufparam.nBufferNum = 1;
+        bufparam.nSizeY     = 480 * 272;       /* Y plane: stride * height */
+        bufparam.nSizeC     = 480 * 272 / 2;   /* UV plane: stride * height / 2 */
+        if (p_AllocInputBuffer(enc, &bufparam) != 0) {
+            LOG("AllocInputBuffer FAIL");
+            goto done;
+        }
+    }
+    buf_alloc = 1;
+    LOG("AllocInputBuffer ok");
+
+    /* 7. Get a pointer to the allocated buffer */
     LOG("GetOneAllocInputBuffer...");
     if (p_GetOneAllocInputBuffer(enc, &inbuf) != 0) {
         LOG("GetOneAllocInputBuffer FAIL");
         goto done;
     }
-    buf_alloc = 1;
+    buf_got = 1;
     LOG("GetOneAllocInputBuffer ok (Y=%p UV=%p)", inbuf.pAddrVirY, inbuf.pAddrVirC);
 
-    /* 7. Fill buffer with synthetic frame and flush CPU cache */
+    /* 8. Fill buffer with synthetic frame and flush CPU cache */
     fill_nv12(inbuf.pAddrVirY, inbuf.pAddrVirC, 480, 272);
     inbuf.bIsFirstFrame = 1;
     inbuf.nPts          = 0;
@@ -279,10 +342,11 @@ int main(void)
 free_out:
     p_FreeOneBitStreamFrame(enc, &outbuf);
 done:
-    if (buf_alloc) { p_ReturnOneAllocInputBuffer(enc, &inbuf); p_ReleaseAllocInputBuffer(enc); }
+    if (buf_got)   p_ReturnOneAllocInputBuffer(enc, &inbuf);
+    if (buf_alloc) p_ReleaseAllocInputBuffer(enc);
     if (enc_init)  p_VideoEncUnInit(enc);
     if (enc)       p_VideoEncDestroy(enc);
-    if (ve_init)   p_VeRelease();
+    if (mem_open && memops) memops->close();
     unload_libs();
     return ret;
 }

@@ -299,10 +299,11 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     ScMemOpsS    *memops   = NULL;
     void         *veops    = NULL;
     VideoEncoder *enc      = NULL;
-    /* Heap-allocated so vendor library writes past sizeof(VencInputBuffer) stay
-     * in the heap and cannot corrupt the CGO wrapper's saved return address. */
-    VencInputBuffer *inbuf    = NULL;
-    VencInputBuffer *reclaimed = NULL;
+    /* Heap-allocated so vendor library writes past sizeof() stay in the heap
+     * and cannot corrupt the CGO wrapper's saved return address. */
+    VencInputBuffer  *inbuf    = NULL;
+    VencInputBuffer  *reclaimed = NULL;
+    VencOutputBuffer *outbuf   = NULL;
 
     unsigned int w = cfg->width;
     unsigned int h = cfg->height;
@@ -382,14 +383,15 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     buf_alloc = 1;
     LOG("input buffer allocated");
 
-    /* Allocate input-buffer descriptors on the heap.  The vendor library writes
-     * more bytes than sizeof(VencInputBuffer) into these descriptors; keeping
-     * them off the stack prevents that overflow from corrupting the CGO return
-     * address above cedar_run's stack frame. 1 KiB is comfortably larger than
-     * any known vendor extension of the struct. */
-    inbuf     = (VencInputBuffer *)calloc(1, 1024);
-    reclaimed = (VencInputBuffer *)calloc(1, 1024);
-    if (!inbuf || !reclaimed) { LOG("calloc inbuf FAIL"); goto done; }
+    /* Allocate buffer descriptors on the heap.  The vendor library writes more
+     * bytes than sizeof() into all three of these structs; keeping them off the
+     * stack prevents any overflow from corrupting the CGO wrapper's saved return
+     * address above cedar_run's frame.  512–1024 bytes is comfortably larger
+     * than any known vendor extension of each struct. */
+    inbuf     = (VencInputBuffer  *)calloc(1, 1024);
+    reclaimed = (VencInputBuffer  *)calloc(1, 1024);
+    outbuf    = (VencOutputBuffer *)calloc(1,  512);
+    if (!inbuf || !reclaimed || !outbuf) { LOG("calloc buf FAIL"); goto done; }
 
     /* Get one input buffer from the free pool; subsequent frames reclaim it
      * via AlreadyUsedInputBuffer after each VideoEncodeOneFrame. */
@@ -442,31 +444,26 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
         /* Drain and forward output bitstream.
          * VideoEncodeOneFrame is async; guard with ValidBitstreamFrameNum so we
          * never call GetOneBitstreamFrame before the hardware has produced output. */
-        VencOutputBuffer outbuf;
         while (p_ValidBitstreamFrameNum(enc) > 0) {
-            memset(&outbuf, 0, sizeof outbuf);
-            if (p_GetOneBitstreamFrame(enc, &outbuf) != 0) break;
-            if (outbuf.pData0 && outbuf.nSize0 > 0)
-                cedar_write_go(cfg->writer_handle, outbuf.pData0, (int)outbuf.nSize0);
-            if (outbuf.pData1 && outbuf.nSize1 > 0)
-                cedar_write_go(cfg->writer_handle, outbuf.pData1, (int)outbuf.nSize1);
-            p_FreeOneBitStreamFrame(enc, &outbuf);
+            memset(outbuf, 0, 512);
+            if (p_GetOneBitstreamFrame(enc, outbuf) != 0) break;
+            if (outbuf->pData0 && outbuf->nSize0 > 0)
+                cedar_write_go(cfg->writer_handle, outbuf->pData0, (int)outbuf->nSize0);
+            if (outbuf->pData1 && outbuf->nSize1 > 0)
+                cedar_write_go(cfg->writer_handle, outbuf->pData1, (int)outbuf->nSize1);
+            p_FreeOneBitStreamFrame(enc, outbuf);
         }
 
         /* Reclaim the just-encoded input buffer from the encoder's "used" queue.
          * Without this the encoder's pending counter overflows after ~4 frames
-         * and AddOneInputBuffer starts failing. */
+         * and AddOneInputBuffer starts failing.
+         * Pass reclaimed directly to ReturnOne to avoid a partial memcpy that
+         * would lose any vendor tail bytes written past sizeof(VencInputBuffer). */
         memset(reclaimed, 0, 1024);
         if (p_AlreadyUsedInputBuffer(enc, reclaimed) != 0 || !reclaimed->_virY) {
             LOG("AlreadyUsedInputBuffer FAIL"); goto done;
         }
-        memcpy(inbuf, reclaimed, sizeof(VencInputBuffer));
-
-        /* Return buffer to free pool, then re-acquire for next frame.
-         * Directly reusing the AlreadyUsedInputBuffer-reclaimed buffer for
-         * AddOneInputBuffer hangs on frame ≥2; cycling through the free pool
-         * (matching the full_h264.c approach) is reliable. */
-        p_ReturnOneAllocInputBuffer(enc, inbuf);
+        p_ReturnOneAllocInputBuffer(enc, reclaimed);
         buf_got = 0;
 
         if (p_GetOneAllocInputBuffer(enc, inbuf) != 0) {
@@ -490,6 +487,7 @@ done:
     if (enc)              p_VideoEncDestroy(enc);
     if (mem_open)         memops->close();
     unload_libs();
+    free(outbuf);
     free(reclaimed);
     free(inbuf);
     free(fb_buf);

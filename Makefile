@@ -1,4 +1,4 @@
-.PHONY: test build-native build-tg5040 build-tg5050 build-my355 build-all release deploy clean build-cedar-probe build-cedar-probe-tg5040 build-cedar-probe-tg5050 build-cedar-probe-my355
+.PHONY: test build-native build-tg5040 build-tg5050 build-my355 build-all release deploy clean build-cedar-probe build-cedar-probe-tg5040 build-cedar-probe-tg5050 build-cedar-probe-my355 build-fb-demo build-fb-demo-tg5040 build-fb-demo-tg5050 build-fb-demo-my355
 
 _CEDAR_RT := $(or $(CONTAINER_RUNTIME),$(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker))
 
@@ -42,3 +42,17 @@ build-cedar-probe-tg5050:
 build-cedar-probe-my355:
 	mkdir -p bin/my355
 	$(_CEDAR_RT) run --rm -v "$(CURDIR):/workspace" -w /workspace -e IN_CONTAINER=1 cast-pak-my355-dev sh -c '$$CC -O2 -Wall -o bin/my355/cedar-probe cmd/cedar-probe/cedar-probe.c -ldl'
+
+build-fb-demo: build-fb-demo-tg5040 build-fb-demo-tg5050 build-fb-demo-my355
+
+build-fb-demo-tg5040:
+	mkdir -p bin/tg5040
+	$(_CEDAR_RT) run --rm -v "$(CURDIR):/workspace" -w /workspace -e IN_CONTAINER=1 cast-pak-tg5040-dev sh -c '$$CC -O2 -Wall -o bin/tg5040/fb-demo cmd/fb-demo/fb-demo.c'
+
+build-fb-demo-tg5050:
+	mkdir -p bin/tg5050
+	$(_CEDAR_RT) run --rm -v "$(CURDIR):/workspace" -w /workspace -e IN_CONTAINER=1 cast-pak-tg5050-dev sh -c '$$CC -O2 -Wall -o bin/tg5050/fb-demo cmd/fb-demo/fb-demo.c'
+
+build-fb-demo-my355:
+	mkdir -p bin/my355
+	$(_CEDAR_RT) run --rm -v "$(CURDIR):/workspace" -w /workspace -e IN_CONTAINER=1 cast-pak-my355-dev sh -c '$$CC -O2 -Wall -o bin/my355/fb-demo cmd/fb-demo/fb-demo.c'

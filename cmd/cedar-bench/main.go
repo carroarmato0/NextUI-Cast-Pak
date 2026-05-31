@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"image"
 	"os"
 	"time"
 
@@ -73,8 +72,9 @@ func runBench(name string, enc stream.Encoder, quality string, duration time.Dur
 	}
 }
 
-func printResult(r result) {
+func printResult(r result, quality string) {
 	fmt.Printf("Encoder:     %s\n", r.name)
+	fmt.Printf("Quality:     %s\n", quality)
 	fmt.Printf("Duration:    %s\n", r.actualDuration.Round(time.Millisecond))
 	if r.firstByteMs >= 0 {
 		fmt.Printf("First byte:  %dms\n", r.firstByteMs)
@@ -95,9 +95,6 @@ func main() {
 	flag.Parse()
 
 	native := stream.ReadNativeResolution("/sys/class/graphics/fb0/modes")
-	if native.X == 0 || native.Y == 0 {
-		native = image.Point{X: 480, Y: 272}
-	}
 
 	cfg := stream.FFmpegConfig{
 		Quality:    *qualityFlag,
@@ -113,16 +110,13 @@ func main() {
 
 	if runCedar {
 		enc, err := stream.NewCedarEncoder(cfg)
-		if errors.Is(err, stream.ErrNotSupported) {
-			fmt.Println("Cedar: not available on this platform")
+		if err != nil {
 			if *encoderFlag == "cedar" {
 				fmt.Fprintf(os.Stderr, "cedar: %v\n", err)
 				os.Exit(1)
 			}
-		} else if err != nil {
-			fmt.Fprintf(os.Stderr, "cedar: %v\n", err)
-			if *encoderFlag == "cedar" {
-				os.Exit(1)
+			if errors.Is(err, stream.ErrNotSupported) {
+				fmt.Println("Cedar: not available on this platform")
 			}
 		} else {
 			fmt.Printf("Benchmarking cedar (%s quality, %s)...\n\n", *qualityFlag, *durationFlag)
@@ -139,8 +133,7 @@ func main() {
 	}
 
 	if cedarResult != nil {
-		fmt.Printf("Quality:     %s\n", *qualityFlag)
-		printResult(*cedarResult)
+		printResult(*cedarResult, *qualityFlag)
 		printed = true
 	}
 
@@ -148,7 +141,6 @@ func main() {
 		if printed {
 			fmt.Println("---")
 		}
-		fmt.Printf("Quality:     %s\n", *qualityFlag)
-		printResult(*ffmpegResult)
+		printResult(*ffmpegResult, *qualityFlag)
 	}
 }

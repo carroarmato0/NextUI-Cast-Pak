@@ -85,48 +85,42 @@ static inline uint32_t lcg_next(uint32_t s) { return s * 1664525u + 1013904223u;
 
 static void render_frame(uint8_t *buf, int w, int h, int bpp, int frame)
 {
-    /* 2 rows per frame gives smooth scroll without tearing artifacts */
+    /* Scrolling SMPTE bars with per-pixel per-frame LCG noise overlay.
+     * The scroll provides global motion (2 rows/frame); the noise forces
+     * unique residuals each frame so H.264 cannot predict away all content.
+     * Noise amplitude ±32: visible but within the hardware encoder's
+     * comfortable operating range (pure random pixels overflow the Cedar
+     * hardware output buffer at 1280x720). */
     int scroll = (frame * 2) % h;
     int bar_h  = h / NBARS;
     if (bar_h < 1) bar_h = 1;
-
-    /* Dithering seed changes each frame so the noise pattern is unique per frame.
-     * This prevents the H.264 encoder from using perfect motion vectors to
-     * represent the frame, producing bitstream output representative of real
-     * content.  Noise is ±16 per channel so colours remain recognisable. */
     uint32_t seed = (uint32_t)frame * 2654435761u;
 
     if (bpp == 16) {
         uint16_t *px = (uint16_t *)(void *)buf;
         for (int y = 0; y < h; y++) {
-            int src_y   = (y + scroll) % h;
-            int bar_idx = (src_y / bar_h) % NBARS;
-            int br = BARS[bar_idx].r;
-            int bg = BARS[bar_idx].g;
-            int bb = BARS[bar_idx].b;
+            int bar_idx = (((y + scroll) % h) / bar_h) % NBARS;
+            int br = BARS[bar_idx].r, bg = BARS[bar_idx].g, bb = BARS[bar_idx].b;
             for (int x = 0; x < w; x++) {
                 seed = lcg_next(seed);
-                int d = (int)(seed >> 27) - 16; /* -16..+15 */
-                int r = br + d < 0 ? 0 : br + d > 255 ? 255 : br + d;
-                int g = bg + d < 0 ? 0 : bg + d > 255 ? 255 : bg + d;
-                int b = bb + d < 0 ? 0 : bb + d > 255 ? 255 : bb + d;
+                int d = (int)(seed >> 26) - 32;
+                int r = br+d < 0 ? 0 : br+d > 255 ? 255 : br+d;
+                int g = bg+d < 0 ? 0 : bg+d > 255 ? 255 : bg+d;
+                int b = bb+d < 0 ? 0 : bb+d > 255 ? 255 : bb+d;
                 px[y * w + x] = to_rgb565((uint8_t)r, (uint8_t)g, (uint8_t)b);
             }
         }
     } else {
         uint32_t *px = (uint32_t *)(void *)buf;
         for (int y = 0; y < h; y++) {
-            int src_y   = (y + scroll) % h;
-            int bar_idx = (src_y / bar_h) % NBARS;
-            int br = BARS[bar_idx].r;
-            int bg = BARS[bar_idx].g;
-            int bb = BARS[bar_idx].b;
+            int bar_idx = (((y + scroll) % h) / bar_h) % NBARS;
+            int br = BARS[bar_idx].r, bg = BARS[bar_idx].g, bb = BARS[bar_idx].b;
             for (int x = 0; x < w; x++) {
                 seed = lcg_next(seed);
-                int d = (int)(seed >> 27) - 16;
-                int r = br + d < 0 ? 0 : br + d > 255 ? 255 : br + d;
-                int g = bg + d < 0 ? 0 : bg + d > 255 ? 255 : bg + d;
-                int b = bb + d < 0 ? 0 : bb + d > 255 ? 255 : bb + d;
+                int d = (int)(seed >> 26) - 32;
+                int r = br+d < 0 ? 0 : br+d > 255 ? 255 : br+d;
+                int g = bg+d < 0 ? 0 : bg+d > 255 ? 255 : bg+d;
+                int b = bb+d < 0 ? 0 : bb+d > 255 ? 255 : bb+d;
                 px[y * w + x] = to_bgra((uint8_t)r, (uint8_t)g, (uint8_t)b);
             }
         }

@@ -38,7 +38,7 @@ type result struct {
 	err            error
 }
 
-func runBench(name string, enc stream.Encoder, quality string, duration time.Duration) result {
+func runBench(name string, enc stream.Encoder, duration time.Duration) result {
 	startTime := time.Now()
 	w := &benchWriter{start: startTime, firstByteMs: -1}
 
@@ -105,6 +105,11 @@ func main() {
 	runCedar := *encoderFlag == "cedar" || *encoderFlag == "both"
 	runFFmpeg := *encoderFlag == "ffmpeg" || *encoderFlag == "both"
 
+	if !runCedar && !runFFmpeg {
+		fmt.Fprintf(os.Stderr, "unknown -encoder value %q; use cedar, ffmpeg, or both\n", *encoderFlag)
+		os.Exit(1)
+	}
+
 	var cedarResult, ffmpegResult *result
 	printed := false
 
@@ -117,10 +122,12 @@ func main() {
 			}
 			if errors.Is(err, stream.ErrNotSupported) {
 				fmt.Println("Cedar: not available on this platform")
+			} else {
+				fmt.Fprintf(os.Stderr, "cedar: skipping: %v\n", err)
 			}
 		} else {
 			fmt.Printf("Benchmarking cedar (%s quality, %s)...\n\n", *qualityFlag, *durationFlag)
-			r := runBench("cedar", enc, *qualityFlag, *durationFlag)
+			r := runBench("cedar", enc, *durationFlag)
 			cedarResult = &r
 		}
 	}
@@ -128,7 +135,7 @@ func main() {
 	if runFFmpeg {
 		enc := stream.NewFFmpegEncoder(cfg)
 		fmt.Printf("Benchmarking ffmpeg (%s quality, %s)...\n\n", *qualityFlag, *durationFlag)
-		r := runBench("ffmpeg", enc, *qualityFlag, *durationFlag)
+		r := runBench("ffmpeg", enc, *durationFlag)
 		ffmpegResult = &r
 	}
 

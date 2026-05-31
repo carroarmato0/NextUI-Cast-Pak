@@ -14,11 +14,10 @@ typedef struct {
 	unsigned int   gop;
 	unsigned int   bitrate_kbps;
 	uintptr_t      writer_handle;
-	volatile int  *stop_flag;
 	int            bpp;
 } cedar_cfg_t;
 
-extern int cedar_run(cedar_cfg_t *cfg);
+extern int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag);
 extern int cedar_probe(void);
 */
 import "C"
@@ -36,7 +35,7 @@ import (
 
 type cedarEncoder struct {
 	preset   CedarPreset
-	stopFlag int32
+	stopFlag *int32 // separately allocated so unsafe.Pointer(e.stopFlag) passes CGO pointer rules
 	doneOnce sync.Once
 	doneErr  error
 	done     chan struct{}
@@ -70,14 +69,15 @@ func NewCedarEncoder(cfg FFmpegConfig) (Encoder, error) {
 			p.Width, p.Height, cfg.Resolution.X, nativeH)
 	}
 
-	return &cedarEncoder{preset: p}, nil
+	sf := new(int32)
+	return &cedarEncoder{preset: p, stopFlag: sf}, nil
 }
 
 func (e *cedarEncoder) Name() string        { return "cedar" }
 func (e *cedarEncoder) ContentType() string { return "video/h264" }
 
 func (e *cedarEncoder) Start(w io.Writer) error {
-	atomic.StoreInt32(&e.stopFlag, 0)
+	atomic.StoreInt32(e.stopFlag, 0)
 	e.done = make(chan struct{})
 	e.doneOnce = sync.Once{}
 	e.doneErr = nil
@@ -102,11 +102,12 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			gop:           C.uint(e.preset.GOP),
 			bitrate_kbps:  C.uint(e.preset.BitrateKbps),
 			writer_handle: C.uintptr_t(h),
-			stop_flag:     (*C.int)(unsafe.Pointer(&e.stopFlag)),
 			bpp:           C.int(e.preset.bpp),
 		}
 
-		rc := C.cedar_run(&cfg)
+		// e.stopFlag is a separately allocated *int32 (no other Go pointers in
+		// that allocation), so unsafe.Pointer(e.stopFlag) satisfies CGO rules.
+		rc := C.cedar_run(&cfg, (*C.int)(unsafe.Pointer(e.stopFlag)))
 		if rc != 0 {
 			err = fmt.Errorf("cedar: encode loop exited with rc=%d", rc)
 		}
@@ -117,7 +118,7 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 }
 
 func (e *cedarEncoder) Stop() {
-	atomic.StoreInt32(&e.stopFlag, 1)
+	atomic.StoreInt32(e.stopFlag, 1)
 }
 
 func (e *cedarEncoder) Wait() error {

@@ -22,7 +22,6 @@ typedef struct {
     unsigned int   gop;
     unsigned int   bitrate_kbps;
     uintptr_t      writer_handle;   /* cgo.Handle value; passed to cedar_write_go */
-    volatile int  *stop_flag;       /* Go side writes atomically; C polls */
     int            bpp;             /* framebuffer bits-per-pixel (16 or 32) */
 } cedar_cfg_t;
 
@@ -95,7 +94,7 @@ typedef struct {
     int            bLastFrame;
     int            bEnableCorp;
     unsigned int   nShareBufFd;
-    unsigned char  _tail[64];
+    unsigned char  _tail[256]; /* enlarged to absorb library writes past known fields */
 } VencInputBuffer;
 
 typedef struct {
@@ -132,8 +131,10 @@ typedef int  (*fn_ReturnOneAllocInputBuffer)(VideoEncoder *, VencInputBuffer *);
 typedef int  (*fn_ReleaseAllocInputBuffer)(VideoEncoder *);
 typedef int  (*fn_AddOneInputBuffer)(VideoEncoder *, VencInputBuffer *);
 typedef int  (*fn_VideoEncodeOneFrame)(VideoEncoder *);
+typedef int  (*fn_ValidBitstreamFrameNum)(VideoEncoder *);
 typedef int  (*fn_GetOneBitstreamFrame)(VideoEncoder *, VencOutputBuffer *);
 typedef int  (*fn_FreeOneBitStreamFrame)(VideoEncoder *, VencOutputBuffer *);
+typedef int  (*fn_AlreadyUsedInputBuffer)(VideoEncoder *, VencInputBuffer *);
 typedef void *(*fn_GetVeOpsS_t)(int);
 typedef void *(*fn_GetOpsS)(void);
 typedef int  (*fn_SetParameter)(VideoEncoder *, int, void *);
@@ -153,14 +154,15 @@ static fn_ReturnOneAllocInputBuffer  p_ReturnOneAllocInputBuffer;
 static fn_ReleaseAllocInputBuffer    p_ReleaseAllocInputBuffer;
 static fn_AddOneInputBuffer          p_AddOneInputBuffer;
 static fn_VideoEncodeOneFrame        p_VideoEncodeOneFrame;
+static fn_ValidBitstreamFrameNum     p_ValidBitstreamFrameNum;
 static fn_GetOneBitstreamFrame       p_GetOneBitstreamFrame;
 static fn_FreeOneBitStreamFrame      p_FreeOneBitStreamFrame;
+static fn_AlreadyUsedInputBuffer     p_AlreadyUsedInputBuffer;
 static fn_GetVeOpsS_t               p_GetVeOpsS;
 static fn_GetOpsS                    p_MemAdapterGetOpsS;
 static fn_SetParameter               p_VideoEncSetParameter;
 
-#define LOGSYM "cedar_encoder"
-#define LOG(fmt, ...) fprintf(stderr, "[" LOGSYM "] " fmt "\n", ##__VA_ARGS__)
+#define LOG(fmt, ...) fprintf(stderr, "[cedar_encoder] " fmt "\n", ##__VA_ARGS__)
 
 #define LOADSYM(lib, var, name) do { \
     *(void **)(&(var)) = dlsym((lib), (name)); \
@@ -193,8 +195,10 @@ static int load_symbols(void)
     LOADSYM(g_libvenc, p_ReleaseAllocInputBuffer,    "ReleaseAllocInputBuffer");
     LOADSYM(g_libvenc, p_AddOneInputBuffer,          "AddOneInputBuffer");
     LOADSYM(g_libvenc, p_VideoEncodeOneFrame,        "VideoEncodeOneFrame");
+    LOADSYM(g_libvenc, p_ValidBitstreamFrameNum,     "ValidBitstreamFrameNum");
     LOADSYM(g_libvenc, p_GetOneBitstreamFrame,       "GetOneBitstreamFrame");
     LOADSYM(g_libvenc, p_FreeOneBitStreamFrame,      "FreeOneBitStreamFrame");
+    LOADSYM(g_libvenc, p_AlreadyUsedInputBuffer,     "AlreadyUsedInputBuffer");
 
     *(void **)(&p_VideoEncSetParameter) = dlsym(g_libvenc, "VideoEncSetParameter");
 
@@ -282,8 +286,9 @@ static void deadline_advance(struct timespec *ts, long frame_ns)
 
 /* ── cedar_run: main encode loop ─────────────────────────────────────────── */
 
-int cedar_run(cedar_cfg_t *cfg)
+int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
 {
+    LOG("cedar_run entered w=%u h=%u bpp=%d fps=%u", cfg->width, cfg->height, cfg->bpp, cfg->fps);
     int ret        = -1;
     int enc_init   = 0;
     int buf_alloc  = 0;
@@ -291,11 +296,13 @@ int cedar_run(cedar_cfg_t *cfg)
     int mem_open   = 0;
     int first_frame = 1;
 
-    ScMemOpsS    *memops = NULL;
-    void         *veops  = NULL;
-    VideoEncoder *enc    = NULL;
-    VencInputBuffer inbuf;
-    memset(&inbuf, 0, sizeof inbuf);
+    ScMemOpsS    *memops   = NULL;
+    void         *veops    = NULL;
+    VideoEncoder *enc      = NULL;
+    /* Heap-allocated so vendor library writes past sizeof(VencInputBuffer) stay
+     * in the heap and cannot corrupt the CGO wrapper's saved return address. */
+    VencInputBuffer *inbuf    = NULL;
+    VencInputBuffer *reclaimed = NULL;
 
     unsigned int w = cfg->width;
     unsigned int h = cfg->height;
@@ -307,19 +314,24 @@ int cedar_run(cedar_cfg_t *cfg)
     /* ── Open framebuffer ── */
     fb_fd = open("/dev/fb0", O_RDONLY);
     if (fb_fd < 0) { LOG("open(/dev/fb0): %s", strerror(errno)); goto done; }
+    LOG("fb0 opened, fb_size=%zu", fb_size);
 
     fb_buf = (uint8_t *)malloc(fb_size);
     if (!fb_buf) { LOG("malloc fb_buf: %s", strerror(errno)); goto done; }
+    LOG("fb_buf allocated");
 
     /* ── Load Cedar libs ── */
     if (load_symbols() != 0) goto done;
+    LOG("symbols loaded");
 
     /* ── Init ops structs and memory adapter ── */
     veops  = p_GetVeOpsS(0);
     memops = (ScMemOpsS *)p_MemAdapterGetOpsS();
     if (!veops || !memops) { LOG("GetVeOpsS/MemAdapterGetOpsS FAIL"); goto done; }
+    LOG("ops ok veops=%p memops=%p", veops, memops);
     if (memops->open() < 0) { LOG("CdcMemOpen FAIL"); goto done; }
     mem_open = 1;
+    LOG("mem open");
 
     /* VeInitialize is called internally by VideoEncCreate — do not call it
      * explicitly or the refcount will be off and VeRelease will segfault. */
@@ -327,6 +339,7 @@ int cedar_run(cedar_cfg_t *cfg)
     /* ── Create encoder ── */
     enc = p_VideoEncCreate(VENC_CODEC_H264);
     if (!enc) { LOG("VideoEncCreate FAIL"); goto done; }
+    LOG("encoder created enc=%p", enc);
 
     /* ── Init encoder ── */
     {
@@ -345,12 +358,16 @@ int cedar_run(cedar_cfg_t *cfg)
         if (p_VideoEncInit(enc, &bcfg) != 0) { LOG("VideoEncInit FAIL"); goto done; }
     }
     enc_init = 1;
+    LOG("encoder init ok");
 
     /* ── Set bitrate ── */
     if (p_VideoEncSetParameter) {
-        /* Index 28 = VENC_IndexParamBitrate (VBR target), value in bps */
-        unsigned int bps = cfg->bitrate_kbps * 1000;
-        p_VideoEncSetParameter(enc, 28, &bps);
+        /* Index 1 = VENC_IndexParamBitrate as used by the vendor CedarC build.
+         * Index 28 triggers an "unsupported" path inside H264SetParameterVer2
+         * that reinitialises the encoder, breaking subsequent AllocInputBuffer. */
+        int bps = (int)(cfg->bitrate_kbps * 1000);
+        p_VideoEncSetParameter(enc, 1, &bps);
+        LOG("bitrate set to %d bps", bps);
     }
 
     /* ── Allocate ION input buffer pool ── */
@@ -363,84 +380,119 @@ int cedar_run(cedar_cfg_t *cfg)
         if (p_AllocInputBuffer(enc, &bp) != 0) { LOG("AllocInputBuffer FAIL"); goto done; }
     }
     buf_alloc = 1;
+    LOG("input buffer allocated");
+
+    /* Allocate input-buffer descriptors on the heap.  The vendor library writes
+     * more bytes than sizeof(VencInputBuffer) into these descriptors; keeping
+     * them off the stack prevents that overflow from corrupting the CGO return
+     * address above cedar_run's stack frame. 1 KiB is comfortably larger than
+     * any known vendor extension of the struct. */
+    inbuf     = (VencInputBuffer *)calloc(1, 1024);
+    reclaimed = (VencInputBuffer *)calloc(1, 1024);
+    if (!inbuf || !reclaimed) { LOG("calloc inbuf FAIL"); goto done; }
+
+    /* Get one input buffer from the free pool; subsequent frames reclaim it
+     * via AlreadyUsedInputBuffer after each VideoEncodeOneFrame. */
+    if (p_GetOneAllocInputBuffer(enc, inbuf) != 0) {
+        LOG("GetOneAllocInputBuffer FAIL"); goto done;
+    }
+    buf_got = 1;
+
+    if (!inbuf->_virY || !inbuf->_virUV) {
+        LOG("GetOneAllocInputBuffer: NULL virtual addresses"); goto done;
+    }
+    LOG("got input buffer virY=%p virUV=%p", inbuf->_virY, inbuf->_virUV);
 
     /* ── Encode loop ── */
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
     long frame_ns = 1000000000L / (long)cfg->fps;
+    LOG("entering encode loop frame_ns=%ld", frame_ns);
 
-    while (!*cfg->stop_flag) {
-        /* Get input buffer slot */
-        if (p_GetOneAllocInputBuffer(enc, &inbuf) != 0) {
-            LOG("GetOneAllocInputBuffer FAIL"); goto done;
-        }
-        buf_got = 1;
-
-        if (!inbuf._virY || !inbuf._virUV) {
-            LOG("buffer virtual addresses NULL"); goto done;
-        }
-
+    int frame_count = 0;
+    while (!*stop_flag) {
         /* Capture framebuffer frame */
         ssize_t n = pread(fb_fd, fb_buf, fb_size, 0);
         if (n != (ssize_t)fb_size) {
-            LOG("pread fb0: expected %zu bytes, got %zd", fb_size, n);
+            LOG("pread fb0: expected %zu got %zd", fb_size, n);
             goto done;
         }
 
         /* Convert framebuffer to NV12 in Cedar input buffer */
         if (cfg->bpp == 16) {
             rgb565_to_nv12((const uint16_t *)fb_buf,
-                           inbuf._virY, inbuf._virUV, w, h);
+                           inbuf->_virY, inbuf->_virUV, w, h);
         } else {
-            bgra_to_nv12(fb_buf, inbuf._virY, inbuf._virUV, w, h);
+            bgra_to_nv12(fb_buf, inbuf->_virY, inbuf->_virUV, w, h);
         }
 
-        inbuf.bIsFirstFrame = first_frame;
-        inbuf.nPts          = 0;
-        first_frame         = 0;
+        inbuf->bIsFirstFrame = first_frame;
+        inbuf->nPts          = 0;
+        first_frame          = 0;
 
-        p_FlushCacheAllocInputBuffer(enc, &inbuf);
+        p_FlushCacheAllocInputBuffer(enc, inbuf);
 
-        if (p_AddOneInputBuffer(enc, &inbuf) != 0) { LOG("AddOneInputBuffer FAIL"); goto done; }
-        buf_got = 0; /* ownership transferred to encoder */
+        if (p_AddOneInputBuffer(enc, inbuf) != 0) {
+            LOG("AddOneInputBuffer FAIL"); goto done;
+        }
+        if (p_VideoEncodeOneFrame(enc) != 0) {
+            LOG("VideoEncodeOneFrame FAIL"); goto done;
+        }
 
-        if (p_VideoEncodeOneFrame(enc) != 0) { LOG("VideoEncodeOneFrame FAIL"); goto done; }
-
-        /* Drain output bitstream */
+        /* Drain and forward output bitstream.
+         * VideoEncodeOneFrame is async; guard with ValidBitstreamFrameNum so we
+         * never call GetOneBitstreamFrame before the hardware has produced output. */
         VencOutputBuffer outbuf;
-        memset(&outbuf, 0, sizeof outbuf);
-        while (p_GetOneBitstreamFrame(enc, &outbuf) == 0) {
-            if (outbuf.nSize0 > 0 && outbuf.pData0) {
-                if (cedar_write_go(cfg->writer_handle, outbuf.pData0, (int)outbuf.nSize0) < 0) {
-                    p_FreeOneBitStreamFrame(enc, &outbuf);
-                    goto done;
-                }
-            }
-            if (outbuf.nSize1 > 0 && outbuf.pData1) {
-                if (cedar_write_go(cfg->writer_handle, outbuf.pData1, (int)outbuf.nSize1) < 0) {
-                    p_FreeOneBitStreamFrame(enc, &outbuf);
-                    goto done;
-                }
-            }
-            p_FreeOneBitStreamFrame(enc, &outbuf);
+        while (p_ValidBitstreamFrameNum(enc) > 0) {
             memset(&outbuf, 0, sizeof outbuf);
+            if (p_GetOneBitstreamFrame(enc, &outbuf) != 0) break;
+            if (outbuf.pData0 && outbuf.nSize0 > 0)
+                cedar_write_go(cfg->writer_handle, outbuf.pData0, (int)outbuf.nSize0);
+            if (outbuf.pData1 && outbuf.nSize1 > 0)
+                cedar_write_go(cfg->writer_handle, outbuf.pData1, (int)outbuf.nSize1);
+            p_FreeOneBitStreamFrame(enc, &outbuf);
         }
 
+        /* Reclaim the just-encoded input buffer from the encoder's "used" queue.
+         * Without this the encoder's pending counter overflows after ~4 frames
+         * and AddOneInputBuffer starts failing. */
+        memset(reclaimed, 0, 1024);
+        if (p_AlreadyUsedInputBuffer(enc, reclaimed) != 0 || !reclaimed->_virY) {
+            LOG("AlreadyUsedInputBuffer FAIL"); goto done;
+        }
+        memcpy(inbuf, reclaimed, sizeof(VencInputBuffer));
+
+        /* Return buffer to free pool, then re-acquire for next frame.
+         * Directly reusing the AlreadyUsedInputBuffer-reclaimed buffer for
+         * AddOneInputBuffer hangs on frame ≥2; cycling through the free pool
+         * (matching the full_h264.c approach) is reliable. */
+        p_ReturnOneAllocInputBuffer(enc, inbuf);
+        buf_got = 0;
+
+        if (p_GetOneAllocInputBuffer(enc, inbuf) != 0) {
+            LOG("GetOneAllocInputBuffer FAIL frame=%d", frame_count); goto done;
+        }
+        buf_got = 1;
+
+        frame_count++;
         /* Pace to target fps */
         deadline_advance(&next, frame_ns);
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
     }
 
-    ret = 0; /* clean stop */
+    ret = 0;
+    LOG("encode loop done frames=%d", frame_count);
 
 done:
-    if (buf_got)   p_ReturnOneAllocInputBuffer(enc, &inbuf);
-    if (buf_alloc) p_ReleaseAllocInputBuffer(enc);
-    if (enc_init)  p_VideoEncUnInit(enc);
-    if (enc)       p_VideoEncDestroy(enc);
-    if (mem_open)  memops->close();
+    if (buf_got && inbuf) p_ReturnOneAllocInputBuffer(enc, inbuf);
+    if (buf_alloc)        p_ReleaseAllocInputBuffer(enc);
+    if (enc_init)         p_VideoEncUnInit(enc);
+    if (enc)              p_VideoEncDestroy(enc);
+    if (mem_open)         memops->close();
     unload_libs();
-    if (fb_buf) free(fb_buf);
+    free(reclaimed);
+    free(inbuf);
+    free(fb_buf);
     if (fb_fd >= 0) close(fb_fd);
     return ret;
 }

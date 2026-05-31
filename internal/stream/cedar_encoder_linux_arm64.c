@@ -361,15 +361,16 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     enc_init = 1;
     LOG("encoder init ok");
 
-    /* ── Set bitrate ── */
-    if (p_VideoEncSetParameter) {
-        /* Index 1 = VENC_IndexParamBitrate as used by the vendor CedarC build.
-         * Index 28 triggers an "unsupported" path inside H264SetParameterVer2
-         * that reinitialises the encoder, breaking subsequent AllocInputBuffer. */
-        int bps = (int)(cfg->bitrate_kbps * 1000);
-        p_VideoEncSetParameter(enc, 1, &bps);
-        LOG("bitrate set to %d bps", bps);
-    }
+    /* ── Bitrate configuration note ──
+     * Probing revealed that H264SetParameterVer2 in this libvencoder build
+     * returns -1 ("do not support this indexType") for ALL indices 0–7
+     * (including index 1 = VENC_IndexParamBitrate).  VideoEncGetParameter
+     * only succeeds for indices 8, 14 (resolution), and 16 (which reads back
+     * 8388608 = 8 Mbps regardless of any SetParameter call).
+     * The encoder operates at a hardware-determined VBR with an ~8 Mbps ceiling;
+     * actual output bitrate is set by content complexity (a static game menu
+     * produces ~10 kbps; busy game scenes produce hundreds of kbps).
+     * cfg->bitrate_kbps is accepted but currently has no effect. */
 
     /* ── Allocate ION input buffer pool ── */
     {

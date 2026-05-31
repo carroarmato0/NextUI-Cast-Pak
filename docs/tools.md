@@ -1,6 +1,13 @@
 # Diagnostic and Benchmark Tools
 
-Tools shipped in the `bin/<platform>/` directories for diagnosing and benchmarking the Cedar hardware encoder on device. All tools require a TrimUI/NextUI device; none work on the build host.
+`cedar-probe`, `cedar-bitrate-probe`, and `fb-demo` live in the
+[allwinner-cedar-tools](https://github.com/carroarmato0/allwinner-cedar-tools)
+repository.  Build them there and copy the binaries to the device.
+
+`cedar-bench` is the Cast-specific encoder benchmark and is built as part of
+this repository.
+
+All tools require a TrimUI/NextUI device; none work on the build host.
 
 ## Copying to device
 

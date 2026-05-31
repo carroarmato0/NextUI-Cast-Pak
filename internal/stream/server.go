@@ -18,6 +18,12 @@ import (
 	"github.com/carroarmato0/nextui-cast-pak/internal/wifi"
 )
 
+// ContentTyper is an optional interface for Encoder implementations that
+// produce a stream format other than MPEG-TS.
+type ContentTyper interface {
+	ContentType() string
+}
+
 type Stats struct {
 	Connected      bool
 	LastClientAddr string
@@ -117,6 +123,8 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 	contentType := "video/mp2t"
 	if strings.HasSuffix(r.URL.Path, ".mp4") {
 		contentType = "video/mp4"
+	} else if ct, ok := encoder.(ContentTyper); ok {
+		contentType = ct.ContentType()
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Connection", "keep-alive")

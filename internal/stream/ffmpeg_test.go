@@ -158,3 +158,16 @@ func TestBuildArgs_KeyframeInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestNewEncoder_FallsBackToFFmpeg(t *testing.T) {
+	// On x86 (non-arm64), the Cedar stub always returns ErrNotSupported,
+	// so NewEncoder must return an FFmpeg encoder without error.
+	cfg := stream.FFmpegConfig{Quality: "medium"}
+	enc, err := stream.NewEncoder(cfg)
+	if err != nil {
+		t.Fatalf("NewEncoder: unexpected error: %v", err)
+	}
+	if enc.Name() != "ffmpeg" {
+		t.Errorf("NewEncoder on x86: want encoder name 'ffmpeg', got %q", enc.Name())
+	}
+}

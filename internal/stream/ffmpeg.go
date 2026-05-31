@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+
+	"github.com/carroarmato0/nextui-cast-pak/internal/logger"
 )
 
 type preset struct {
@@ -119,10 +121,14 @@ func NewFFmpegEncoder(cfg FFmpegConfig) Encoder {
 
 // NewEncoder is the transport-level factory for the stream backend.
 //
-// It currently returns the FFmpeg software path, but the selection point is
-// intentionally centralized here so a Cedar backend can be added later
-// without changing the controller or UI plumbing.
+// It tries the Cedar hardware encoder first. If Cedar is unavailable (missing
+// /dev/cedar_dev, missing vendor libs, unsupported resolution) it falls back
+// to the FFmpeg software path without propagating the error.
 func NewEncoder(cfg FFmpegConfig) (Encoder, error) {
+	if enc, err := NewCedarEncoder(cfg); err == nil {
+		logger.Info("stream: using Cedar hardware encoder")
+		return enc, nil
+	}
 	return NewFFmpegEncoder(cfg), nil
 }
 

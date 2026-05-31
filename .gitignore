@@ -1,6 +1,7 @@
 .worktrees/
 .remember/
 .superpowers/
+docs/superpowers/
 bin/tg5040/*
 bin/tg5050/*
 bin/my355/*

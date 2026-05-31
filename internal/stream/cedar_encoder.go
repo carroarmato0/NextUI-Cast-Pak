@@ -63,6 +63,13 @@ func NewCedarEncoder(cfg FFmpegConfig) (Encoder, error) {
 		return nil, err
 	}
 	p.bpp = bpp
+
+	nativeH := Align16(cfg.Resolution.Y)
+	if p.Width != cfg.Resolution.X || p.Height != nativeH {
+		return nil, fmt.Errorf("cedar: preset %dx%d does not match native FB %dx%d; FFmpeg will handle scaling",
+			p.Width, p.Height, cfg.Resolution.X, nativeH)
+	}
+
 	return &cedarEncoder{preset: p}, nil
 }
 

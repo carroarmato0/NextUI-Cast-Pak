@@ -29,6 +29,7 @@ import (
 	"runtime/cgo"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -36,7 +37,9 @@ import (
 type cedarEncoder struct {
 	preset   CedarPreset
 	stopFlag int32
-	done     chan error
+	doneOnce sync.Once
+	doneErr  error
+	done     chan struct{}
 }
 
 // NewCedarEncoder probes for Cedar support and returns an encoder if available.
@@ -68,16 +71,20 @@ func (e *cedarEncoder) ContentType() string { return "video/h264" }
 
 func (e *cedarEncoder) Start(w io.Writer) error {
 	atomic.StoreInt32(&e.stopFlag, 0)
-	e.done = make(chan error, 1)
+	e.done = make(chan struct{})
+	e.doneOnce = sync.Once{}
+	e.doneErr = nil
 
 	h := cgo.NewHandle(w)
 
 	go func() {
 		defer h.Delete()
 
+		var err error
+
 		// Write SPS/PPS before the first encoded frame so decoders can initialise.
-		if _, err := w.Write(e.preset.SPSPPS); err != nil {
-			e.done <- err
+		if _, err = w.Write(e.preset.SPSPPS); err != nil {
+			e.doneOnce.Do(func() { e.doneErr = err; close(e.done) })
 			return
 		}
 
@@ -94,10 +101,9 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 
 		rc := C.cedar_run(&cfg)
 		if rc != 0 {
-			e.done <- fmt.Errorf("cedar: encode loop exited with error")
-		} else {
-			e.done <- nil
+			err = fmt.Errorf("cedar: encode loop exited with rc=%d", rc)
 		}
+		e.doneOnce.Do(func() { e.doneErr = err; close(e.done) })
 	}()
 
 	return nil
@@ -111,7 +117,8 @@ func (e *cedarEncoder) Wait() error {
 	if e.done == nil {
 		return nil
 	}
-	return <-e.done
+	<-e.done
+	return e.doneErr
 }
 
 // cedar_write_go is the CGO export called from C to write encoded bytes to the Go io.Writer.

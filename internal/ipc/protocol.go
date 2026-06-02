@@ -7,6 +7,7 @@ const (
 	CmdSelectDevice   = "select-device"
 	CmdSetQuality     = "set-quality"
 	CmdSetAudio       = "set-audio"
+	CmdSetEncoder     = "set-encoder"
 	CmdRefreshDevices = "refresh-devices"
 	CmdGetStatus      = "get-status"
 	CmdSetLogLevel    = "set-log-level"
@@ -36,6 +37,7 @@ type Command struct {
 	DeviceName string `json:"device_name,omitempty"`
 	Quality    string `json:"quality,omitempty"`
 	Audio      *bool  `json:"audio,omitempty"`
+	Encoder    string `json:"encoder,omitempty"`
 	LogLevel   string `json:"log_level,omitempty"`
 }
 

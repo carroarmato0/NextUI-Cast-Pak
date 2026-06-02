@@ -11,6 +11,7 @@ type Config struct {
 	Quality    string `json:"quality"`
 	Audio      bool   `json:"audio"`
 	LogLevel   string `json:"log_level"`
+	Encoder    string `json:"encoder"`
 }
 
 func Defaults() Config {
@@ -18,6 +19,7 @@ func Defaults() Config {
 		Quality:  "medium",
 		Audio:    true,
 		LogLevel: "info",
+		Encoder:  "auto",
 	}
 }
 

@@ -577,7 +577,7 @@ func handleSplitSettingsEvent(a *App, event sdl.Event, selected *int, navLimiter
 			if navLimiter != nil && !navLimiter.Allow() {
 				return false
 			}
-			if *selected < 3 {
+			if *selected < 4 {
 				(*selected)++
 			}
 		case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
@@ -601,7 +601,7 @@ func handleSplitSettingsEvent(a *App, event sdl.Event, selected *int, navLimiter
 			if navLimiter != nil && !navLimiter.Allow() {
 				return false
 			}
-			if *selected < 3 {
+			if *selected < 4 {
 				(*selected)++
 			}
 		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_START:
@@ -622,7 +622,7 @@ func handleSplitSettingsEvent(a *App, event sdl.Event, selected *int, navLimiter
 			if navLimiter != nil && !navLimiter.Allow() {
 				return false
 			}
-			if *selected < 3 {
+			if *selected < 4 {
 				(*selected)++
 			}
 		}
@@ -640,7 +640,7 @@ func handleSplitSettingsEvent(a *App, event sdl.Event, selected *int, navLimiter
 				if navLimiter != nil && !navLimiter.Allow() {
 					return false
 				}
-				if *selected < 3 {
+				if *selected < 4 {
 					(*selected)++
 				}
 			}
@@ -675,6 +675,18 @@ func activateSplitSettingsSelection(a *App, selected int) {
 			a.client.Send(ipc.Command{Cmd: ipc.CmdSetAudio, Audio: &a.cfg.Audio}) //nolint:errcheck
 		}
 	case 2:
+		next := cycleStringOption(a.cfg.Encoder, []string{"auto", "cedar", "ffmpeg"})
+		if next == "" {
+			return
+		}
+		a.cfg.Encoder = next
+		if err := config.Save(a.cfgPath, a.cfg); err != nil {
+			logger.Error("ui: save config: %v", err)
+		}
+		if a.client != nil {
+			a.client.Send(ipc.Command{Cmd: ipc.CmdSetEncoder, Encoder: next}) //nolint:errcheck
+		}
+	case 3:
 		next := cycleStringOption(a.cfg.LogLevel, []string{"info", "debug"})
 		if next == "" {
 			return
@@ -686,7 +698,7 @@ func activateSplitSettingsSelection(a *App, selected int) {
 		if a.client != nil {
 			a.client.Send(ipc.Command{Cmd: ipc.CmdSetLogLevel, LogLevel: next}) //nolint:errcheck
 		}
-	case 3:
+	case 4:
 		msg := fmt.Sprintf("Cast Pak\nVersion: %s\nCommit: %s", a.version, a.commit)
 		gaba.ConfirmationMessage(msg, nil, gaba.MessageOptions{}) //nolint:errcheck
 	}
@@ -730,7 +742,7 @@ func renderSplitSettingsMenu(a *App, fonts *splitScreenFonts, ms menuState, sele
 	items := splitSettingsItems(a)
 	cardY := topRect.Y + panelInnerPadding + int32(fonts.title.Height()) + 10
 	cardGap := int32(8)
-	cardW := (topRect.W - panelInnerPadding*2 - cardGap*3) / 4
+	cardW := (topRect.W - panelInnerPadding*2 - cardGap*4) / 5
 	if cardW < 54 {
 		cardW = 54
 	}
@@ -770,9 +782,14 @@ func splitSettingsItems(a *App) []settingsItem {
 	if a.cfg.Audio {
 		audio = "ON"
 	}
+	encoder := a.cfg.Encoder
+	if encoder == "" {
+		encoder = "auto"
+	}
 	return []settingsItem{
 		{label: "Quality", value: strings.ToUpper(a.cfg.Quality)},
 		{label: "Audio", value: audio},
+		{label: "Encoder", value: strings.ToUpper(encoder)},
 		{label: "Log", value: strings.ToUpper(a.cfg.LogLevel)},
 		{label: "About", value: "View"},
 	}
@@ -797,7 +814,11 @@ type settingsItem struct {
 
 func diagnosticRows(a *App, ms menuState) []diagnosticRow {
 	streamInfo := streamURL(a.cfg.DeviceAddr, ms.deviceName)
-	mode := strings.ToUpper(a.cfg.Quality) + " • audio " + yesNo(a.cfg.Audio)
+	enc := a.cfg.Encoder
+	if enc == "" {
+		enc = "auto"
+	}
+	mode := strings.ToUpper(a.cfg.Quality) + " • " + enc + " • audio " + yesNo(a.cfg.Audio)
 	if ms.deviceName != "" {
 		mode += " • " + ms.deviceName
 	}

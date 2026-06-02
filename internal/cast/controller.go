@@ -80,6 +80,16 @@ func (c *Controller) HandleCommand(cmd ipc.Command) {
 				c.restartFFmpeg()
 			}
 		}
+	case ipc.CmdSetEncoder:
+		c.mu.Lock()
+		changed := c.cfg.Encoder != cmd.Encoder
+		c.cfg.Encoder = cmd.Encoder
+		cfgSnap := *c.cfg
+		c.mu.Unlock()
+		config.Save(c.cfgPath, cfgSnap)
+		if changed && c.State() == ipc.StateStreaming {
+			c.restartFFmpeg()
+		}
 	case ipc.CmdSetLogLevel:
 		c.mu.Lock()
 		c.cfg.LogLevel = cmd.LogLevel
@@ -197,8 +207,11 @@ func (c *Controller) runServer(ctx context.Context) {
 			ALSADevice: alsaDev,
 			Resolution: res,
 		}
-		logger.Info("controller: selected stream encoder with quality=%s audio=%t res=%dx%d", ffCfg.Quality, ffCfg.Audio, ffCfg.Resolution.X, ffCfg.Resolution.Y)
-		return stream.NewEncoder(ffCfg)
+		c.mu.RLock()
+		encoderPref := c.cfg.Encoder
+		c.mu.RUnlock()
+		logger.Info("controller: selected stream encoder with quality=%s audio=%t res=%dx%d encoder=%s", ffCfg.Quality, ffCfg.Audio, ffCfg.Resolution.X, ffCfg.Resolution.Y, encoderPref)
+		return stream.NewEncoderWithPreference(ffCfg, encoderPref)
 	}
 
 	if err := streamSrv.Start(); err != nil {

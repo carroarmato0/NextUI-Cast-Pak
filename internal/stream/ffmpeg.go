@@ -120,16 +120,35 @@ func NewFFmpegEncoder(cfg FFmpegConfig) Encoder {
 }
 
 // NewEncoder is the transport-level factory for the stream backend.
-//
-// It tries the Cedar hardware encoder first. If Cedar is unavailable (missing
-// /dev/cedar_dev, missing vendor libs, unsupported resolution) it falls back
-// to the FFmpeg software path without propagating the error.
+// It tries Cedar first and falls back to FFmpeg if unavailable.
 func NewEncoder(cfg FFmpegConfig) (Encoder, error) {
-	if enc, err := NewCedarEncoder(cfg); err == nil {
-		logger.Info("stream: using Cedar hardware encoder")
+	return NewEncoderWithPreference(cfg, "auto")
+}
+
+// NewEncoderWithPreference selects the encoder backend based on pref:
+//   - "cedar"  — Cedar hardware only; returns error if unavailable
+//   - "ffmpeg" — FFmpeg software only
+//   - "auto"   — Cedar first, FFmpeg fallback (default)
+func NewEncoderWithPreference(cfg FFmpegConfig, pref string) (Encoder, error) {
+	switch pref {
+	case "cedar":
+		enc, err := NewCedarEncoder(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("cedar encoder unavailable: %w", err)
+		}
+		logger.Info("stream: using Cedar hardware encoder (forced)")
 		return enc, nil
+	case "ffmpeg":
+		logger.Info("stream: using FFmpeg software encoder (forced)")
+		return NewFFmpegEncoder(cfg), nil
+	default:
+		if enc, err := NewCedarEncoder(cfg); err == nil {
+			logger.Info("stream: using Cedar hardware encoder")
+			return enc, nil
+		}
+		logger.Info("stream: Cedar unavailable, using FFmpeg software encoder")
+		return NewFFmpegEncoder(cfg), nil
 	}
-	return NewFFmpegEncoder(cfg), nil
 }
 
 func max(a, b int) int {

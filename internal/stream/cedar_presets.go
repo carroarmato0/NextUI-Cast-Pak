@@ -28,72 +28,62 @@ func Align16(n int) int {
 
 // cedarSPSPPS is a lookup table keyed by (width, height).
 // All entries are Annex B, Baseline Profile, verified on H618 hardware.
-// 640x368 is derived; 480x272 and 1280x720 are hardware-verified.
 var cedarSPSPPS = map[[2]int][]byte{
 	{480, 272}: {
-		// Level 3.0, verified on TrimUI Brick (tg5040)
+		// Baseline L3.0, poc_type=2, log2_max_frame_num_minus4=4, verified on H618
 		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x1e,
-		0xed, 0x03, 0xc1, 0x1c, 0x80,
+		0x95, 0xa0, 0x78, 0x23, 0x90,
 		0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
 	},
 	{640, 368}: {
-		// Level 3.0, derived from Exp-Golomb encoding of 640x368
+		// Baseline L3.0, poc_type=2, log2_max_frame_num_minus4=4, verified on H618
 		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x1e,
-		0xed, 0x01, 0x48, 0x63, 0x20,
+		0x95, 0xa0, 0x28, 0x0b, 0xe4,
 		0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
 	},
 	{1280, 720}: {
-		// Level 3.1, verified on TrimUI Smart Pro (tg5050) via ADB
+		// Baseline L3.1, poc_type=0, log2_max_frame_num_minus4=4, log2_max_poc_lsb_minus4=4
+		// Derived by bit-parsing actual IDR output from H618 Cedar encoder (tg5040).
+		// The encoder uses poc_type=0 (not poc_type=2); without matching poc_lsb field
+		// in the SPS, decoders misparse the slice header and reject every frame.
 		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x1f,
-		0xed, 0x00, 0xa0, 0x0b, 0x72,
+		0x96, 0x54, 0x02, 0x80, 0x2d, 0xc8,
 		0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
 	},
 }
 
-// cedarFixedPresets maps quality → (logical width, logical height) for
-// non-native presets. Height is the logical value; Cedar uses Align16(height).
-var cedarFixedPresets = map[string]struct{ w, h, fps, gop, kbps int }{
-	"low":    {480, 270, 15, 8, 500},
-	"medium": {640, 360, 30, 15, 900},
-	"ultra":  {480, 270, 15, 1, 1200},
+// cedarQualityParams maps quality name → (fps, gop, bitrate_kbps).
+// Cedar always encodes at native framebuffer resolution; quality only
+// controls temporal/bitrate parameters.
+var cedarQualityParams = map[string]struct{ fps, gop, kbps int }{
+	"low":    {15, 8, 500},
+	"medium": {30, 15, 900},
+	"high":   {30, 15, 1500},
+	"ultra":  {15, 1, 1200},
 }
 
 // CedarPresetFor resolves Cedar encoder parameters for the given quality and
-// native framebuffer resolution. Returns an error if the resolution has
-// no SPS/PPS entry (only relevant for the "high" preset) or if quality is unknown.
+// native framebuffer resolution. Cedar always encodes at native resolution;
+// quality governs FPS, GOP, and bitrate only.
 func CedarPresetFor(quality string, native image.Point) (CedarPreset, error) {
-	if quality == "high" {
-		w := Align16(native.X)
-		h := Align16(native.Y)
-		spspps, ok := cedarSPSPPS[[2]int{w, h}]
-		if !ok {
-			return CedarPreset{}, errors.New("cedar: no SPS/PPS entry for native resolution")
-		}
-		return CedarPreset{
-			Width:       w,
-			Height:      h,
-			FPS:         30,
-			GOP:         15,
-			BitrateKbps: 1500,
-			SPSPPS:      spspps,
-		}, nil
+	w := Align16(native.X)
+	h := Align16(native.Y)
+	spspps, ok := cedarSPSPPS[[2]int{w, h}]
+	if !ok {
+		return CedarPreset{}, fmt.Errorf("cedar: no SPS/PPS entry for %dx%d", w, h)
 	}
 
-	fp, ok := cedarFixedPresets[quality]
+	qp, ok := cedarQualityParams[quality]
 	if !ok {
 		return CedarPreset{}, fmt.Errorf("cedar: unknown quality preset %q", quality)
 	}
-	h := Align16(fp.h)
-	spspps, ok := cedarSPSPPS[[2]int{fp.w, h}]
-	if !ok {
-		panic("cedar: SPS/PPS table and fixed presets are out of sync")
-	}
+
 	return CedarPreset{
-		Width:       fp.w,
+		Width:       w,
 		Height:      h,
-		FPS:         fp.fps,
-		GOP:         fp.gop,
-		BitrateKbps: fp.kbps,
+		FPS:         qp.fps,
+		GOP:         qp.gop,
+		BitrateKbps: qp.kbps,
 		SPSPPS:      spspps,
 	}, nil
 }

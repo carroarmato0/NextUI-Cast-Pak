@@ -46,9 +46,10 @@ type StreamServer struct {
 	// On-demand encoder factory. GetEncoder is the preferred abstraction; the
 	// older GetFFmpegCmd callback remains as a compatibility fallback for the
 	// existing software path.
-	GetEncoder   func() (Encoder, error)
-	GetFFmpegCmd func() (*exec.Cmd, error)
-	OnMetrics    func(Stats)
+	GetEncoder     func() (Encoder, error)
+	GetFFmpegCmd   func() (*exec.Cmd, error)
+	GetContentType func() string // optional; returns MIME type for DLNA manifest
+	OnMetrics      func(Stats)
 
 	cmdMu         sync.Mutex
 	activeEncoder Encoder
@@ -90,6 +91,7 @@ func (s *StreamServer) Start() error {
 	mux.HandleFunc("/stream", s.handler)
 	mux.HandleFunc("/stream.mpg", s.handler)
 	mux.HandleFunc("/stream.ts", s.handler)
+	mux.HandleFunc("/stream.h264", s.handler)
 	mux.HandleFunc("/description.xml", s.descriptionHandler)
 	mux.HandleFunc("/control/ContentDirectory", s.controlDirectoryHandler)
 	s.srv = &http.Server{Handler: mux}
@@ -136,6 +138,7 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Flushing not supported", http.StatusInternalServerError)
 		return
 	}
+	flusher.Flush() // send headers immediately so the client doesn't timeout waiting for the encoder to start
 
 	logger.Info("dms: HTTP client connected from %s requesting %s. Spawning on-demand %s...", r.RemoteAddr, r.URL.Path, encoder.Name())
 	requestStartedAt := time.Now()
@@ -351,6 +354,22 @@ var (
 	browseFlagRegex = regexp.MustCompile(`(?i)<BrowseFlag[^>]*>(.*?)</BrowseFlag>`)
 )
 
+func (s *StreamServer) resolveStreamURLAndMIME(localIP string) (url, mime string) {
+	mime = "video/mp2t"
+	if s.GetContentType != nil {
+		mime = s.GetContentType()
+	}
+	switch mime {
+	case "video/h264":
+		url = fmt.Sprintf("http://%s:7979/stream.h264", localIP)
+	default:
+		mime = "video/mp2t"
+		url = fmt.Sprintf("http://%s:7979/stream.ts", localIP)
+	}
+	logger.Debug("dms: manifest resolved mime=%s url=%s", mime, url)
+	return url, mime
+}
+
 func (s *StreamServer) controlDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/xml; charset=\"utf-8\"")
 	if r.Method != "POST" {
@@ -377,7 +396,7 @@ func (s *StreamServer) controlDirectoryHandler(w http.ResponseWriter, r *http.Re
 	logger.Info("dms: ContentDirectory request from %s. ObjectID: %s, BrowseFlag: %s", r.RemoteAddr, objectID, browseFlag)
 
 	localIP := wifi.LocalIP(nil, nil)
-	streamURLTs := fmt.Sprintf("http://%s:7979/stream.ts", localIP)
+	streamURL, streamMIME := s.resolveStreamURLAndMIME(localIP)
 
 	var resp string
 	action := r.Header.Get("SOAPAction")
@@ -429,9 +448,9 @@ func (s *StreamServer) controlDirectoryHandler(w http.ResponseWriter, r *http.Re
   <item id="live_stream" parentID="video_folder" restricted="1">
     <dc:title>TrimUI Screen Cast</dc:title>
     <upnp:class>object.item.videoItem.movie</upnp:class>
-    <res protocolInfo="http-get:*:video/mp2t:*">%s</res>
+    <res protocolInfo="http-get:*:%s:*">%s</res>
   </item>
-</DIDL-Lite>`, xmlEscape(streamURLTs))
+</DIDL-Lite>`, streamMIME, xmlEscape(streamURL))
 			}
 		} else {
 			if objectID == "0" {
@@ -447,9 +466,9 @@ func (s *StreamServer) controlDirectoryHandler(w http.ResponseWriter, r *http.Re
   <item id="live_stream" parentID="video_folder" restricted="1">
     <dc:title>TrimUI Screen Cast</dc:title>
     <upnp:class>object.item.videoItem.movie</upnp:class>
-    <res protocolInfo="http-get:*:video/mp2t:*">%s</res>
+    <res protocolInfo="http-get:*:%s:*">%s</res>
   </item>
-</DIDL-Lite>`, xmlEscape(streamURLTs))
+</DIDL-Lite>`, streamMIME, xmlEscape(streamURL))
 			} else {
 				didl = `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"></DIDL-Lite>`
 				numReturned = 0

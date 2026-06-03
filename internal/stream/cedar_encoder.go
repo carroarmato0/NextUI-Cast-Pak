@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"runtime/cgo"
 	"strconv"
 	"strings"
@@ -39,6 +40,10 @@ type cedarEncoder struct {
 	doneOnce sync.Once
 	doneErr  error
 	done     chan struct{}
+
+	mu     sync.Mutex
+	muxCmd *exec.Cmd
+	muxPW  *os.File
 }
 
 // NewCedarEncoder probes for Cedar support and returns an encoder if available.
@@ -63,34 +68,74 @@ func NewCedarEncoder(cfg FFmpegConfig) (Encoder, error) {
 	}
 	p.bpp = bpp
 
-	nativeH := Align16(cfg.Resolution.Y)
-	if p.Width != cfg.Resolution.X || p.Height != nativeH {
-		return nil, fmt.Errorf("cedar: preset %dx%d does not match native FB %dx%d; FFmpeg will handle scaling",
-			p.Width, p.Height, cfg.Resolution.X, nativeH)
-	}
-
 	sf := new(int32)
 	return &cedarEncoder{preset: p, stopFlag: sf}, nil
 }
 
+func CedarAvailable() bool                  { return C.cedar_probe() == 0 }
 func (e *cedarEncoder) Name() string        { return "cedar" }
-func (e *cedarEncoder) ContentType() string { return "video/h264" }
+func (e *cedarEncoder) ContentType() string { return "video/mp2t" }
 
+// Start launches the Cedar encode loop and a lightweight ffmpeg mux subprocess
+// that wraps the raw H.264 Annex B stream into MPEG-TS.
+//
+// os.Pipe() is used instead of io.Pipe() so that the kernel pipe read end can
+// be passed as an *os.File directly to cmd.Stdin — no copy goroutine needed.
+// Cedar writes Annex B frames to the pipe write end via cedar_write_go.
 func (e *cedarEncoder) Start(w io.Writer) error {
 	atomic.StoreInt32(e.stopFlag, 0)
 	e.done = make(chan struct{})
 	e.doneOnce = sync.Once{}
 	e.doneErr = nil
 
-	h := cgo.NewHandle(w)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("cedar: os.Pipe: %w", err)
+	}
+
+	cmd := exec.Command("ffmpeg",
+		"-y",
+		"-fflags", "nobuffer",
+		"-f", "h264",
+		"-framerate", strconv.Itoa(e.preset.FPS),
+		"-i", "pipe:0",
+		"-map", "0:v",
+		"-c:v", "copy",
+		"-f", "mpegts",
+		"-fflags", "nobuffer",
+		"-flush_packets", "1",
+		"-muxdelay", "0",
+		"-muxpreload", "0",
+		"-mpegts_flags", "resend_headers+initial_discontinuity",
+		"pipe:1",
+	)
+	cmd.Stdin = pr  // *os.File → fd passed directly, no copy goroutine
+	cmd.Stdout = w
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return fmt.Errorf("cedar: mux ffmpeg: %w", err)
+	}
+	_ = pr.Close() // parent no longer needs the read end
+
+	e.mu.Lock()
+	e.muxCmd = cmd
+	e.muxPW = pw
+	e.mu.Unlock()
+
+	h := cgo.NewHandle(io.Writer(pw))
 
 	go func() {
 		defer h.Delete()
+		defer pw.Close()
 
 		var err error
 
 		// Write SPS/PPS before the first encoded frame so decoders can initialise.
-		if _, err = w.Write(e.preset.SPSPPS); err != nil {
+		if _, err = pw.Write(e.preset.SPSPPS); err != nil {
+			_ = cmd.Wait()
 			e.doneOnce.Do(func() { e.doneErr = err; close(e.done) })
 			return
 		}
@@ -111,6 +156,15 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 		if rc != 0 {
 			err = fmt.Errorf("cedar: encode loop exited with rc=%d", rc)
 		}
+
+		// pw.Close() via defer signals EOF to ffmpeg.
+		if muxErr := cmd.Wait(); muxErr != nil && err == nil {
+			// ffmpeg exits non-zero when killed by Stop(); ignore that case.
+			if atomic.LoadInt32(e.stopFlag) == 0 {
+				err = fmt.Errorf("cedar: mux: %w", muxErr)
+			}
+		}
+
 		e.doneOnce.Do(func() { e.doneErr = err; close(e.done) })
 	}()
 
@@ -119,6 +173,20 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 
 func (e *cedarEncoder) Stop() {
 	atomic.StoreInt32(e.stopFlag, 1)
+
+	e.mu.Lock()
+	cmd := e.muxCmd
+	pw := e.muxPW
+	e.muxCmd = nil
+	e.muxPW = nil
+	e.mu.Unlock()
+
+	if pw != nil {
+		_ = pw.Close()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
 }
 
 func (e *cedarEncoder) Wait() error {

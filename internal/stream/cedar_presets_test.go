@@ -19,13 +19,15 @@ func TestAlign16(t *testing.T) {
 	}
 }
 
+// Cedar always encodes at native framebuffer resolution; only FPS/bitrate/GOP vary.
+
 func TestCedarPresetFor_Low(t *testing.T) {
 	p, err := stream.CedarPresetFor("low", image.Point{X: 1280, Y: 720})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p.Width != 480 || p.Height != 272 {
-		t.Errorf("low: want 480x272, got %dx%d", p.Width, p.Height)
+	if p.Width != 1280 || p.Height != 720 {
+		t.Errorf("low: want native 1280x720, got %dx%d", p.Width, p.Height)
 	}
 	if p.FPS != 15 {
 		t.Errorf("low: want 15 fps, got %d", p.FPS)
@@ -46,8 +48,8 @@ func TestCedarPresetFor_Medium(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p.Width != 640 || p.Height != 368 {
-		t.Errorf("medium: want 640x368, got %dx%d", p.Width, p.Height)
+	if p.Width != 1280 || p.Height != 720 {
+		t.Errorf("medium: want native 1280x720, got %dx%d", p.Width, p.Height)
 	}
 	if p.FPS != 30 {
 		t.Errorf("medium: want 30 fps, got %d", p.FPS)
@@ -73,10 +75,10 @@ func TestCedarPresetFor_High_KnownResolution(t *testing.T) {
 	}
 }
 
-func TestCedarPresetFor_High_UnknownResolution(t *testing.T) {
+func TestCedarPresetFor_UnknownResolution(t *testing.T) {
 	_, err := stream.CedarPresetFor("high", image.Point{X: 854, Y: 480})
 	if err == nil {
-		t.Error("high 854x480: expected error for unsupported resolution")
+		t.Error("854x480: expected error for unsupported resolution")
 	}
 }
 
@@ -85,8 +87,8 @@ func TestCedarPresetFor_Ultra(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p.Width != 480 || p.Height != 272 {
-		t.Errorf("ultra: want 480x272, got %dx%d", p.Width, p.Height)
+	if p.Width != 1280 || p.Height != 720 {
+		t.Errorf("ultra: want native 1280x720, got %dx%d", p.Width, p.Height)
 	}
 	if p.GOP != 1 {
 		t.Errorf("ultra: want GOP 1, got %d", p.GOP)
@@ -106,8 +108,9 @@ func TestCedarPresetFor_UnknownQuality(t *testing.T) {
 func TestSPSPPS_1280x720(t *testing.T) {
 	p, _ := stream.CedarPresetFor("high", image.Point{X: 1280, Y: 720})
 	want := []byte{
+		// Baseline L3.1, poc_type=0, log2_max_frame_num_minus4=4, log2_max_poc_lsb_minus4=4
 		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x1f,
-		0xed, 0x00, 0xa0, 0x0b, 0x72,
+		0x96, 0x54, 0x02, 0x80, 0x2d, 0xc8,
 		0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
 	}
 	if len(p.SPSPPS) != len(want) {
@@ -116,23 +119,6 @@ func TestSPSPPS_1280x720(t *testing.T) {
 	for i, b := range want {
 		if p.SPSPPS[i] != b {
 			t.Errorf("1280x720 SPS/PPS byte[%d]: want 0x%02x, got 0x%02x", i, b, p.SPSPPS[i])
-		}
-	}
-}
-
-func TestSPSPPS_480x272(t *testing.T) {
-	p, _ := stream.CedarPresetFor("low", image.Point{X: 1280, Y: 720})
-	want := []byte{
-		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x1e,
-		0xed, 0x03, 0xc1, 0x1c, 0x80,
-		0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
-	}
-	if len(p.SPSPPS) != len(want) {
-		t.Fatalf("480x272 SPS/PPS: want %d bytes, got %d", len(want), len(p.SPSPPS))
-	}
-	for i, b := range want {
-		if p.SPSPPS[i] != b {
-			t.Errorf("480x272 SPS/PPS byte[%d]: want 0x%02x, got 0x%02x", i, b, p.SPSPPS[i])
 		}
 	}
 }

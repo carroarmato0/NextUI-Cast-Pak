@@ -12,6 +12,8 @@
 #include <errno.h>
 #include <dlfcn.h>
 #include <time.h>
+#include <sys/ioctl.h>
+#include <linux/fb.h>
 
 /* ── cedar_cfg_t ────────────────────────────────────────────────────────── */
 
@@ -138,6 +140,7 @@ typedef int  (*fn_AlreadyUsedInputBuffer)(VideoEncoder *, VencInputBuffer *);
 typedef void *(*fn_GetVeOpsS_t)(int);
 typedef void *(*fn_GetOpsS)(void);
 typedef int  (*fn_SetParameter)(VideoEncoder *, int, void *);
+typedef int  (*fn_GetParameter)(VideoEncoder *, int, void *);
 
 /* ── Globals ─────────────────────────────────────────────────────────────── */
 
@@ -161,6 +164,7 @@ static fn_AlreadyUsedInputBuffer     p_AlreadyUsedInputBuffer;
 static fn_GetVeOpsS_t               p_GetVeOpsS;
 static fn_GetOpsS                    p_MemAdapterGetOpsS;
 static fn_SetParameter               p_VideoEncSetParameter;
+static fn_GetParameter               p_VideoEncGetParameter;
 
 #define LOG(fmt, ...) fprintf(stderr, "[cedar_encoder] " fmt "\n", ##__VA_ARGS__)
 
@@ -201,6 +205,7 @@ static int load_symbols(void)
     LOADSYM(g_libvenc, p_AlreadyUsedInputBuffer,     "AlreadyUsedInputBuffer");
 
     *(void **)(&p_VideoEncSetParameter) = dlsym(g_libvenc, "VideoEncSetParameter");
+    *(void **)(&p_VideoEncGetParameter) = dlsym(g_libvenc, "VideoEncGetParameter");
 
     return 0;
 }
@@ -293,6 +298,7 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     int enc_init   = 0;
     int buf_alloc  = 0;
     int buf_got    = 0;
+    int buf_submitted = 0;
     int mem_open   = 0;
     int first_frame = 1;
 
@@ -311,11 +317,19 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     uint8_t *fb_buf = NULL;
 
     int fb_fd = -1;
+    struct fb_var_screeninfo fb_vinfo;
+    memset(&fb_vinfo, 0, sizeof fb_vinfo);
 
     /* ── Open framebuffer ── */
     fb_fd = open("/dev/fb0", O_RDONLY);
     if (fb_fd < 0) { LOG("open(/dev/fb0): %s", strerror(errno)); goto done; }
-    LOG("fb0 opened, fb_size=%zu", fb_size);
+
+    if (ioctl(fb_fd, FBIOGET_VSCREENINFO, &fb_vinfo) < 0) {
+        LOG("FBIOGET_VSCREENINFO failed: %s — defaulting yoffset=0", strerror(errno));
+    }
+    LOG("fb0 opened: xres=%u yres=%u xoffset=%u yoffset=%u bpp=%d fb_size=%zu",
+        fb_vinfo.xres, fb_vinfo.yres, fb_vinfo.xoffset, fb_vinfo.yoffset,
+        cfg->bpp, fb_size);
 
     fb_buf = (uint8_t *)malloc(fb_size);
     if (!fb_buf) { LOG("malloc fb_buf: %s", strerror(errno)); goto done; }
@@ -346,7 +360,7 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     {
         VencBaseConfig bcfg;
         memset(&bcfg, 0, sizeof bcfg);
-        bcfg.bEncH264Nalu  = 0;   /* Annex B output; SPS/PPS prepended by Go */
+        bcfg.bEncH264Nalu  = 0;   /* raw NAL output; library prepends 4-byte length prefix (AVCC-style) */
         bcfg.nInputWidth   = w;
         bcfg.nInputHeight  = h;
         bcfg.nDstWidth     = w;
@@ -404,7 +418,8 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     if (!inbuf->_virY || !inbuf->_virUV) {
         LOG("GetOneAllocInputBuffer: NULL virtual addresses"); goto done;
     }
-    LOG("got input buffer virY=%p virUV=%p", inbuf->_virY, inbuf->_virUV);
+    LOG("got input buffer _virY=%p _virUV=%p",
+        inbuf->_virY, inbuf->_virUV);
 
     /* ── Encode loop ── */
     struct timespec next;
@@ -414,11 +429,21 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
 
     int frame_count = 0;
     while (!*stop_flag) {
-        /* Capture framebuffer frame */
-        ssize_t n = pread(fb_fd, fb_buf, fb_size, 0);
+        /* Capture framebuffer frame, reading from the currently-displayed page.
+         * Double-buffered displays pan yoffset to flip; offset 0 is stale. */
+        if (ioctl(fb_fd, FBIOGET_VSCREENINFO, &fb_vinfo) < 0)
+            fb_vinfo.yoffset = 0;
+        off_t fb_off = (off_t)fb_vinfo.yoffset * w * (cfg->bpp / 8);
+        ssize_t n = pread(fb_fd, fb_buf, fb_size, fb_off);
         if (n != (ssize_t)fb_size) {
-            LOG("pread fb0: expected %zu got %zd", fb_size, n);
+            LOG("pread fb0: expected %zu got %zd offset %lld", fb_size, n, (long long)fb_off);
             goto done;
+        }
+        if (frame_count == 0) {
+            LOG("frame0 fb_off=%lld yoffset=%u first8: %02x%02x%02x%02x %02x%02x%02x%02x",
+                (long long)fb_off, fb_vinfo.yoffset,
+                fb_buf[0], fb_buf[1], fb_buf[2], fb_buf[3],
+                fb_buf[4], fb_buf[5], fb_buf[6], fb_buf[7]);
         }
 
         /* Convert framebuffer to NV12 in Cedar input buffer */
@@ -438,6 +463,7 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
         if (p_AddOneInputBuffer(enc, inbuf) != 0) {
             LOG("AddOneInputBuffer FAIL"); goto done;
         }
+        buf_submitted = 1;
         if (p_VideoEncodeOneFrame(enc) != 0) {
             LOG("VideoEncodeOneFrame FAIL"); goto done;
         }
@@ -448,8 +474,25 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
         while (p_ValidBitstreamFrameNum(enc) > 0) {
             memset(outbuf, 0, 512);
             if (p_GetOneBitstreamFrame(enc, outbuf) != 0) break;
-            if (outbuf->pData0 && outbuf->nSize0 > 0)
+            if ((frame_count == 0 || frame_count == 1) && outbuf->pData0 && outbuf->nSize0 >= 5) {
+                unsigned int show = outbuf->nSize0 < 32 ? outbuf->nSize0 : 32;
+                LOG("frame[%d]: key=%d sz0=%u nal=0x%02x bytes[0..%u]:",
+                    frame_count, outbuf->bIsKeyFrame, outbuf->nSize0,
+                    outbuf->pData0[4] & 0x1f, show - 1);
+                for (unsigned int _i = 0; _i < show; _i++)
+                    fprintf(stderr, " %02x", outbuf->pData0[_i]);
+                fprintf(stderr, "\n");
+            }
+            /* CedarC prepends a 4-byte big-endian length prefix to each NAL unit
+             * (AVCC-style). Replace it with an Annex B start code (00 00 00 01)
+             * so ffmpeg's -f h264 parser can consume the stream. */
+            if (outbuf->pData0 && outbuf->nSize0 > 4) {
+                static const uint8_t sc[4] = {0x00, 0x00, 0x00, 0x01};
+                cedar_write_go(cfg->writer_handle, sc, 4);
+                cedar_write_go(cfg->writer_handle, outbuf->pData0 + 4, (int)(outbuf->nSize0 - 4));
+            } else if (outbuf->pData0 && outbuf->nSize0 > 0) {
                 cedar_write_go(cfg->writer_handle, outbuf->pData0, (int)outbuf->nSize0);
+            }
             if (outbuf->pData1 && outbuf->nSize1 > 0)
                 cedar_write_go(cfg->writer_handle, outbuf->pData1, (int)outbuf->nSize1);
             p_FreeOneBitStreamFrame(enc, outbuf);
@@ -466,6 +509,7 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
         }
         p_ReturnOneAllocInputBuffer(enc, reclaimed);
         buf_got = 0;
+        buf_submitted = 0;
 
         if (p_GetOneAllocInputBuffer(enc, inbuf) != 0) {
             LOG("GetOneAllocInputBuffer FAIL frame=%d", frame_count); goto done;
@@ -482,6 +526,15 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     LOG("encode loop done frames=%d", frame_count);
 
 done:
+    if (buf_submitted && reclaimed) {
+        if (p_AlreadyUsedInputBuffer(enc, reclaimed) == 0 && reclaimed->_virY) {
+            p_ReturnOneAllocInputBuffer(enc, reclaimed);
+            buf_submitted = 0;
+            buf_got = 0;
+        } else {
+            LOG("cleanup: AlreadyUsedInputBuffer after submit FAIL");
+        }
+    }
     if (buf_got && inbuf) p_ReturnOneAllocInputBuffer(enc, inbuf);
     if (buf_alloc)        p_ReleaseAllocInputBuffer(enc);
     if (enc_init)         p_VideoEncUnInit(enc);

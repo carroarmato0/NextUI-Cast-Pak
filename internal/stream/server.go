@@ -92,6 +92,7 @@ func (s *StreamServer) Start() error {
 	mux.HandleFunc("/stream.mpg", s.handler)
 	mux.HandleFunc("/stream.ts", s.handler)
 	mux.HandleFunc("/stream.h264", s.handler)
+	mux.HandleFunc("/stream.sdp", s.handler)
 	mux.HandleFunc("/description.xml", s.descriptionHandler)
 	mux.HandleFunc("/control/ContentDirectory", s.controlDirectoryHandler)
 	s.srv = &http.Server{Handler: mux}
@@ -123,7 +124,9 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := "video/mp2t"
-	if strings.HasSuffix(r.URL.Path, ".mp4") {
+	if strings.HasSuffix(r.URL.Path, ".sdp") {
+		contentType = "application/sdp"
+	} else if strings.HasSuffix(r.URL.Path, ".mp4") {
 		contentType = "video/mp4"
 	} else if ct, ok := encoder.(ContentTyper); ok {
 		contentType = ct.ContentType()
@@ -138,10 +141,43 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Flushing not supported", http.StatusInternalServerError)
 		return
 	}
-	flusher.Flush() // send headers immediately so the client doesn't timeout waiting for the encoder to start
+	flusher.Flush()
 
 	logger.Info("dms: HTTP client connected from %s requesting %s. Spawning on-demand %s...", r.RemoteAddr, r.URL.Path, encoder.Name())
 	requestStartedAt := time.Now()
+
+	s.cmdMu.Lock()
+	if s.activeEncoder != nil {
+		logger.Warn("dms: terminating previous active encoder process")
+		s.activeEncoder.Stop()
+		_ = s.activeEncoder.Wait()
+		s.activeEncoder = nil
+	}
+	s.activeEncoder = encoder
+	s.cmdMu.Unlock()
+
+	if strings.HasSuffix(r.URL.Path, ".sdp") {
+		if err := encoder.Start(io.Discard); err != nil {
+			s.cmdMu.Lock()
+			if s.activeEncoder == encoder {
+				s.activeEncoder = nil
+			}
+			s.cmdMu.Unlock()
+			logger.Error("dms: failed to start %s encoder for SDP manifest: %v", encoder.Name(), err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if sp, ok := encoder.(interface{ SDP() string }); ok {
+			if _, err := io.WriteString(w, sp.SDP()); err != nil {
+				logger.Error("dms: failed to write SDP manifest: %v", err)
+			}
+			flusher.Flush()
+		}
+		logger.Info("dms: SDP manifest served to %s", r.RemoteAddr)
+		return
+	}
+
 	s.metricsMu.Lock()
 	s.connected = true
 	s.lastClientAddr = r.RemoteAddr
@@ -173,16 +209,6 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 	s.lastFetchMu.Lock()
 	s.lastFetchAt = requestStartedAt
 	s.lastFetchMu.Unlock()
-
-	s.cmdMu.Lock()
-	if s.activeEncoder != nil {
-		logger.Warn("dms: terminating previous active encoder process")
-		s.activeEncoder.Stop()
-		_ = s.activeEncoder.Wait()
-		s.activeEncoder = nil
-	}
-	s.activeEncoder = encoder
-	s.cmdMu.Unlock()
 
 	if err := encoder.Start(&streamResponseWriter{server: s, writer: w, flusher: flusher}); err != nil {
 		s.cmdMu.Lock()
@@ -362,6 +388,8 @@ func (s *StreamServer) resolveStreamURLAndMIME(localIP string) (url, mime string
 	switch mime {
 	case "video/h264":
 		url = fmt.Sprintf("http://%s:7979/stream.h264", localIP)
+	case "application/sdp":
+		url = fmt.Sprintf("http://%s:7979/stream.sdp", localIP)
 	default:
 		mime = "video/mp2t"
 		url = fmt.Sprintf("http://%s:7979/stream.ts", localIP)

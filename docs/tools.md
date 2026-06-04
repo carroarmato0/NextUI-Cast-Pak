@@ -125,6 +125,23 @@ Total bytes: 369882
 
 ---
 
+## validate_cedar_screenshot.sh
+
+- `validate_cedar_screenshot.sh` — captures the live framebuffer from `/dev/fb0`, runs Cedar in raw mode on the same frame set, decodes the H.264 output, and compares the decoded image against the screenshot baseline. Use `--frames 1` for the tightest single-frame comparison; `--buffers` lets you vary the vendor input-buffer pool size during the run. The helper also verifies that `bin/tg5040/cedar-bench` is an ARM64 binary before it pushes anything to the device.
+
+```sh
+./scripts/validate_cedar_screenshot.sh --quality high --frames 1 --buffers 1
+```
+
+**Outputs:**
+- `screenshot.png` — framebuffer capture decoded from `/dev/fb0`
+- `cedar-raw.h264` — raw Cedar Annex B output
+- `cedar-decoded.png` — Cedar output decoded back to PNG
+- `cedar-bench.log` — Cedar encoder log
+- `summary.txt` — pass/fail summary with the mean absolute pixel error
+
+---
+
 ## fb-demo
 
 Writes an animated SMPTE colour-bar pattern to `/dev/fb0` at a steady frame rate. Use it to feed motion content to `cedar-bench` or `cedar-bitrate-probe` so the encoder has real inter-frame work to do.

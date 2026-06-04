@@ -139,12 +139,37 @@ func TestBuildArgs_UltraPreset(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_RawOutput(t *testing.T) {
+	cfg := stream.FFmpegConfig{
+		Quality:    "high",
+		Audio:      true,
+		ALSADevice: "hw:0,0",
+		Resolution: image.Point{X: 1280, Y: 720},
+		CedarRaw:   true,
+	}
+	args := stream.BuildArgs(cfg)
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "-f h264") {
+		t.Error("raw output should use h264 muxer")
+	}
+	if !strings.HasSuffix(joined, "pipe:1") {
+		t.Error("raw output should still write to pipe:1")
+	}
+	if strings.Contains(joined, "-f mpegts") {
+		t.Error("raw output should not use MPEG-TS")
+	}
+	if strings.Contains(joined, "anullsrc") || strings.Contains(joined, "-c:a") {
+		t.Error("raw output should not inject audio")
+	}
+}
+
 func TestBuildArgs_KeyframeInterval(t *testing.T) {
 	cases := []struct {
 		quality string
 		wantGOP string
 	}{
-		{"low", "-g 7"},    // 15 fps × 0.5 s ≈ 7 frames
+		{"low", "-g 7"},     // 15 fps × 0.5 s ≈ 7 frames
 		{"medium", "-g 15"}, // 30 fps × 0.5 s = 15 frames
 		{"high", "-g 15"},   // 30 fps × 0.5 s = 15 frames
 		{"ultra", "-g 1"},   // all-I frames for minimal latency

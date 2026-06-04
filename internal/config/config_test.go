@@ -19,6 +19,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("default log_level = %q, want %q", cfg.LogLevel, "info")
 	}
+	if cfg.Transport != "ts" {
+		t.Errorf("default transport = %q, want %q", cfg.Transport, "ts")
+	}
 }
 
 func TestLoadMissing(t *testing.T) {
@@ -41,6 +44,7 @@ func TestRoundTrip(t *testing.T) {
 		Quality:    "high",
 		Audio:      false,
 		LogLevel:   "debug",
+		Transport:  "ts",
 	}
 	if err := config.Save(path, want); err != nil {
 		t.Fatalf("Save: %v", err)

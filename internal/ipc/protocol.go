@@ -8,6 +8,7 @@ const (
 	CmdSetQuality     = "set-quality"
 	CmdSetAudio       = "set-audio"
 	CmdSetEncoder     = "set-encoder"
+	CmdSetTransport   = "set-transport"
 	CmdRefreshDevices = "refresh-devices"
 	CmdGetStatus      = "get-status"
 	CmdSetLogLevel    = "set-log-level"
@@ -38,6 +39,7 @@ type Command struct {
 	Quality    string `json:"quality,omitempty"`
 	Audio      *bool  `json:"audio,omitempty"`
 	Encoder    string `json:"encoder,omitempty"`
+	Transport  string `json:"transport,omitempty"`
 	LogLevel   string `json:"log_level,omitempty"`
 }
 

@@ -2,6 +2,7 @@ package cast
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,6 +85,25 @@ func (c *Controller) HandleCommand(cmd ipc.Command) {
 		c.mu.Lock()
 		changed := c.cfg.Encoder != cmd.Encoder
 		c.cfg.Encoder = cmd.Encoder
+		cfgSnap := *c.cfg
+		c.mu.Unlock()
+		config.Save(c.cfgPath, cfgSnap)
+		if changed && c.State() == ipc.StateStreaming {
+			c.restartFFmpeg()
+		}
+	case ipc.CmdSetTransport:
+		c.mu.Lock()
+		normalized := normalizeTransport(cmd.Transport)
+		changed := c.cfg.Transport != normalized
+		if c.cfg.Transport != normalized {
+			c.cfg.Transport = normalized
+		}
+		if normalized == "h264" || normalized == "rtp" {
+			if c.cfg.Quality != "ultra" {
+				c.cfg.Quality = "ultra"
+				changed = true
+			}
+		}
 		cfgSnap := *c.cfg
 		c.mu.Unlock()
 		config.Save(c.cfgPath, cfgSnap)
@@ -186,12 +206,29 @@ func (c *Controller) runServer(ctx context.Context) {
 	}
 
 	// Configure the dynamic on-demand encoder factory.
+	streamSrv.GetContentType = func() string {
+		c.mu.RLock()
+		transport := normalizeTransport(c.cfg.Transport)
+		c.mu.RUnlock()
+		switch transport {
+		case "h264":
+			return "video/h264"
+		case "rtp":
+			return "application/sdp"
+		default:
+			return "video/mp2t"
+		}
+	}
 	streamSrv.GetEncoder = func() (stream.Encoder, error) {
 		c.mu.RLock()
 		audioEnabled := c.cfg.Audio
 		quality := c.cfg.Quality
+		transport := normalizeTransport(c.cfg.Transport)
 		c.mu.RUnlock()
 
+		if transport == "h264" && quality != "ultra" {
+			quality = "ultra"
+		}
 		alsaDev := ""
 		if audioEnabled {
 			alsaDev = stream.ProbeALSA(nil)
@@ -203,13 +240,18 @@ func (c *Controller) runServer(ctx context.Context) {
 		res := stream.ReadNativeResolution("/sys/class/graphics/fb0/modes")
 		ffCfg := stream.FFmpegConfig{
 			Quality:    quality,
-			Audio:      audioEnabled && alsaDev != "",
+			Audio:      audioEnabled && alsaDev != "" && transport != "h264" && transport != "rtp",
 			ALSADevice: alsaDev,
 			Resolution: res,
+			CedarRaw:   transport == "h264",
+			CedarRTP:   transport == "rtp",
 		}
 		c.mu.RLock()
 		encoderPref := c.cfg.Encoder
 		c.mu.RUnlock()
+		if transport == "rtp" {
+			encoderPref = "cedar"
+		}
 		logger.Info("controller: selected stream encoder with quality=%s audio=%t res=%dx%d encoder=%s", ffCfg.Quality, ffCfg.Audio, ffCfg.Resolution.X, ffCfg.Resolution.Y, encoderPref)
 		return stream.NewEncoderWithPreference(ffCfg, encoderPref)
 	}
@@ -235,5 +277,16 @@ func (c *Controller) runServer(ctx context.Context) {
 func (c *Controller) restartFFmpeg() {
 	if c.State() == ipc.StateStreaming {
 		c.startServer()
+	}
+}
+
+func normalizeTransport(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "h264", "raw", "low-latency":
+		return "h264"
+	case "rtp", "udp":
+		return "rtp"
+	default:
+		return "ts"
 	}
 }

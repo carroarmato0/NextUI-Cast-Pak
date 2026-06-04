@@ -12,14 +12,16 @@ type Config struct {
 	Audio      bool   `json:"audio"`
 	LogLevel   string `json:"log_level"`
 	Encoder    string `json:"encoder"`
+	Transport  string `json:"transport"`
 }
 
 func Defaults() Config {
 	return Config{
-		Quality:  "medium",
-		Audio:    true,
-		LogLevel: "info",
-		Encoder:  "auto",
+		Quality:   "medium",
+		Audio:     true,
+		LogLevel:  "info",
+		Encoder:   "auto",
+		Transport: "ts",
 	}
 }
 

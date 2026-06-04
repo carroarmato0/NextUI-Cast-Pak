@@ -577,7 +577,7 @@ func handleSplitSettingsEvent(a *App, event sdl.Event, selected *int, navLimiter
 			if navLimiter != nil && !navLimiter.Allow() {
 				return false
 			}
-			if *selected < 4 {
+			if *selected < 5 {
 				(*selected)++
 			}
 		case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
@@ -601,7 +601,7 @@ func handleSplitSettingsEvent(a *App, event sdl.Event, selected *int, navLimiter
 			if navLimiter != nil && !navLimiter.Allow() {
 				return false
 			}
-			if *selected < 4 {
+			if *selected < 5 {
 				(*selected)++
 			}
 		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_START:
@@ -622,7 +622,7 @@ func handleSplitSettingsEvent(a *App, event sdl.Event, selected *int, navLimiter
 			if navLimiter != nil && !navLimiter.Allow() {
 				return false
 			}
-			if *selected < 4 {
+			if *selected < 5 {
 				(*selected)++
 			}
 		}
@@ -687,6 +687,27 @@ func activateSplitSettingsSelection(a *App, selected int) {
 			a.client.Send(ipc.Command{Cmd: ipc.CmdSetEncoder, Encoder: next}) //nolint:errcheck
 		}
 	case 3:
+		next := cycleStringOption(a.cfg.Transport, []string{"ts", "h264", "rtp"})
+		if next == "" {
+			return
+		}
+		if next == "h264" && a.cfg.Quality != "ultra" {
+			a.cfg.Quality = "ultra"
+		}
+		if next == "rtp" && a.cfg.Quality != "ultra" {
+			a.cfg.Quality = "ultra"
+		}
+		a.cfg.Transport = next
+		if err := config.Save(a.cfgPath, a.cfg); err != nil {
+			logger.Error("ui: save config: %v", err)
+		}
+		if a.client != nil {
+			a.client.Send(ipc.Command{Cmd: ipc.CmdSetTransport, Transport: next}) //nolint:errcheck
+			if next == "h264" && a.client != nil {
+				a.client.Send(ipc.Command{Cmd: ipc.CmdSetQuality, Quality: "ultra"}) //nolint:errcheck
+			}
+		}
+	case 4:
 		next := cycleStringOption(a.cfg.LogLevel, []string{"info", "debug"})
 		if next == "" {
 			return
@@ -698,7 +719,7 @@ func activateSplitSettingsSelection(a *App, selected int) {
 		if a.client != nil {
 			a.client.Send(ipc.Command{Cmd: ipc.CmdSetLogLevel, LogLevel: next}) //nolint:errcheck
 		}
-	case 4:
+	case 5:
 		msg := fmt.Sprintf("Cast Pak\nVersion: %s\nCommit: %s", a.version, a.commit)
 		gaba.ConfirmationMessage(msg, nil, gaba.MessageOptions{}) //nolint:errcheck
 	}
@@ -742,7 +763,7 @@ func renderSplitSettingsMenu(a *App, fonts *splitScreenFonts, ms menuState, sele
 	items := splitSettingsItems(a)
 	cardY := topRect.Y + panelInnerPadding + int32(fonts.title.Height()) + 10
 	cardGap := int32(8)
-	cardW := (topRect.W - panelInnerPadding*2 - cardGap*4) / 5
+	cardW := (topRect.W - panelInnerPadding*2 - cardGap*int32(len(items)-1)) / int32(len(items))
 	if cardW < 54 {
 		cardW = 54
 	}
@@ -786,10 +807,15 @@ func splitSettingsItems(a *App) []settingsItem {
 	if encoder == "" {
 		encoder = "auto"
 	}
+	transport := strings.ToUpper(a.cfg.Transport)
+	if transport == "" {
+		transport = "TS"
+	}
 	return []settingsItem{
 		{label: "Quality", value: strings.ToUpper(a.cfg.Quality)},
 		{label: "Audio", value: audio},
 		{label: "Encoder", value: strings.ToUpper(encoder)},
+		{label: "Transport", value: transport},
 		{label: "Log", value: strings.ToUpper(a.cfg.LogLevel)},
 		{label: "About", value: "View"},
 	}
@@ -813,7 +839,7 @@ type settingsItem struct {
 }
 
 func diagnosticRows(a *App, ms menuState) []diagnosticRow {
-	streamInfo := streamURL(a.cfg.DeviceAddr, ms.deviceName)
+	streamInfo := streamURL(a.cfg.DeviceAddr, ms.deviceName, a.cfg.Transport)
 	enc := a.cfg.Encoder
 	if enc == "" {
 		enc = "auto"
@@ -872,13 +898,20 @@ func stateDescription(ms menuState) string {
 	}
 }
 
-func streamURL(primaryHost, fallbackHost string) string {
+func streamURL(primaryHost, fallbackHost, transport string) string {
 	host := fallbackHost
 	if host == "" {
 		host = primaryHost
 	}
 	host = normalizeStreamHost(host)
-	return "http://" + host + "/stream.ts"
+	switch strings.ToLower(strings.TrimSpace(transport)) {
+	case "h264":
+		return "http://" + host + "/stream.h264"
+	case "rtp":
+		return "http://" + host + "/stream.sdp"
+	default:
+		return "http://" + host + "/stream.ts"
+	}
 }
 
 func normalizeStreamHost(host string) string {

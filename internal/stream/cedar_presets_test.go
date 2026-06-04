@@ -108,10 +108,10 @@ func TestCedarPresetFor_UnknownQuality(t *testing.T) {
 func TestSPSPPS_1280x720(t *testing.T) {
 	p, _ := stream.CedarPresetFor("high", image.Point{X: 1280, Y: 720})
 	want := []byte{
-		// Baseline L3.1, poc_type=0, log2_max_frame_num_minus4=4, log2_max_poc_lsb_minus4=4
+		// Baseline L3.1, poc_type=0, entropy_coding_mode_flag=1, log2_max_frame_num_minus4=4, log2_max_poc_lsb_minus4=4
 		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x1f,
 		0x96, 0x54, 0x02, 0x80, 0x2d, 0xc8,
-		0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80,
+		0x00, 0x00, 0x00, 0x01, 0x68, 0xee, 0x3c, 0x80,
 	}
 	if len(p.SPSPPS) != len(want) {
 		t.Fatalf("1280x720 SPS/PPS: want %d bytes, got %d", len(want), len(p.SPSPPS))

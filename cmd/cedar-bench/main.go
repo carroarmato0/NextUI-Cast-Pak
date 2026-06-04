@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -38,11 +39,23 @@ type result struct {
 	err            error
 }
 
-func runBench(name string, enc stream.Encoder, duration time.Duration) result {
+func runBench(name string, enc stream.Encoder, duration time.Duration, dumpPath string) result {
 	startTime := time.Now()
 	w := &benchWriter{start: startTime, firstByteMs: -1}
 
-	if err := enc.Start(w); err != nil {
+	var out io.Writer = w
+	var dumpFile *os.File
+	if dumpPath != "" {
+		var err error
+		dumpFile, err = os.Create(dumpPath)
+		if err != nil {
+			return result{name: name, firstByteMs: -1, err: err}
+		}
+		defer dumpFile.Close()
+		out = io.MultiWriter(w, dumpFile)
+	}
+
+	if err := enc.Start(out); err != nil {
 		return result{name: name, firstByteMs: -1, err: err}
 	}
 
@@ -92,14 +105,23 @@ func main() {
 	encoderFlag := flag.String("encoder", "both", "which encoder(s) to benchmark: cedar, ffmpeg, or both")
 	durationFlag := flag.Duration("duration", 10*time.Second, "how long to run each encoder")
 	qualityFlag := flag.String("quality", "high", "quality preset: low, medium, high, ultra")
+	dumpFlag := flag.String("dump", "", "optional path to dump raw encoder output for inspection")
+	rawFlag := flag.Bool("cedar-raw", false, "dump raw Annex B H.264 from Cedar without ffmpeg muxing")
+	syntheticFlag := flag.Bool("cedar-synthetic", false, "feed Cedar a synthetic NV12 frame instead of reading /dev/fb0")
+	cedarBuffersFlag := flag.Int("cedar-buffers", 1, "number of vendor input buffers to allocate for Cedar")
+	cedarFramesFlag := flag.Int("cedar-frames", 0, "stop Cedar after N encoded frames (0 = unlimited until duration/Stop)")
 	flag.Parse()
 
 	native := stream.ReadNativeResolution("/sys/class/graphics/fb0/modes")
 
 	cfg := stream.FFmpegConfig{
-		Quality:    *qualityFlag,
-		Audio:      false,
-		Resolution: native,
+		Quality:           *qualityFlag,
+		Audio:             false,
+		Resolution:        native,
+		CedarRaw:          *rawFlag,
+		CedarSynthetic:    *syntheticFlag,
+		CedarInputBuffers: *cedarBuffersFlag,
+		CedarMaxFrames:    *cedarFramesFlag,
 	}
 
 	runCedar := *encoderFlag == "cedar" || *encoderFlag == "both"
@@ -127,7 +149,7 @@ func main() {
 			}
 		} else {
 			fmt.Printf("Benchmarking cedar (%s quality, %s)...\n\n", *qualityFlag, *durationFlag)
-			r := runBench("cedar", enc, *durationFlag)
+			r := runBench("cedar", enc, *durationFlag, *dumpFlag)
 			cedarResult = &r
 		}
 	}
@@ -135,7 +157,7 @@ func main() {
 	if runFFmpeg {
 		enc := stream.NewFFmpegEncoder(cfg)
 		fmt.Printf("Benchmarking ffmpeg (%s quality, %s)...\n\n", *qualityFlag, *durationFlag)
-		r := runBench("ffmpeg", enc, *durationFlag)
+		r := runBench("ffmpeg", enc, *durationFlag, *dumpFlag)
 		ffmpegResult = &r
 	}
 

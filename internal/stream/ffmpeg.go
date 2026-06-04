@@ -29,6 +29,27 @@ type FFmpegConfig struct {
 	Audio      bool
 	ALSADevice string
 	Resolution image.Point
+
+	// CedarRaw skips the ffmpeg MPEG-TS mux wrapper and writes raw Annex B
+	// H.264 directly to the caller's writer. It is intended for isolated Cedar
+	// debugging and validation only.
+	CedarRaw bool
+
+	// CedarRTP sends Cedar output through ffmpeg as RTP/UDP multicast and serves
+	// an SDP document to VLC. It is the lowest-latency mode available here.
+	CedarRTP bool
+
+	// CedarSynthetic bypasses /dev/fb0 capture and feeds a synthetic NV12
+	// frame into Cedar so we can isolate the encoder from framebuffer issues.
+	CedarSynthetic bool
+
+	// CedarInputBuffers controls the size of the vendor input-buffer pool for
+	// Cedar runs. Zero means "use the encoder default" (currently 1).
+	CedarInputBuffers int
+
+	// CedarMaxFrames bounds a Cedar run to a fixed number of encoded frames.
+	// Zero means unlimited until Stop() is called.
+	CedarMaxFrames int
 }
 
 func BuildArgs(cfg FFmpegConfig) []string {
@@ -49,12 +70,16 @@ func BuildArgs(cfg FFmpegConfig) []string {
 	// Input video: frame buffer
 	args = append(args, "-f", "fbdev", "-framerate", fmt.Sprintf("%d", p.fps), "-i", "/dev/fb0")
 
-	// Input audio: ALSA or silence
-	useRealAudio := cfg.Audio && cfg.ALSADevice != ""
-	if useRealAudio {
-		args = append(args, "-f", "alsa", "-i", cfg.ALSADevice)
-	} else {
-		args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000")
+	// Raw H.264 output is video-only. Keep the input side free of audio so the
+	// caller can stream directly to VLC with minimal buffering.
+	if !cfg.CedarRaw {
+		// Input audio: ALSA or silence
+		useRealAudio := cfg.Audio && cfg.ALSADevice != ""
+		if useRealAudio {
+			args = append(args, "-f", "alsa", "-i", cfg.ALSADevice)
+		} else {
+			args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000")
+		}
 	}
 
 	// H.264 with ultra-low-latency tuning tends to start faster and is much
@@ -85,25 +110,35 @@ func BuildArgs(cfg FFmpegConfig) []string {
 		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d", p.width, p.height))
 	}
 
-	// AAC is widely compatible and buffers efficiently in mobile players.
-	args = append(args,
-		"-c:a", "aac",
-		"-b:a", fmt.Sprintf("%dk", p.audioBitrate),
-		"-ar", "48000",
-		"-ac", "2",
-	)
+	if !cfg.CedarRaw {
+		// AAC is widely compatible and buffers efficiently in mobile players.
+		args = append(args,
+			"-c:a", "aac",
+			"-b:a", fmt.Sprintf("%dk", p.audioBitrate),
+			"-ar", "48000",
+			"-ac", "2",
+		)
+	}
 
-	// Output format: MPEG-TS over pipe
-	args = append(args,
-		"-f", "mpegts",
-		"-fflags", "nobuffer",
-		"-flush_packets", "1",
-		"-muxdelay", "0",
-		"-muxpreload", "0",
-		"-max_interleave_delta", "0",
-		"-mpegts_flags", "resend_headers+initial_discontinuity",
-		"pipe:1",
-	)
+	if cfg.CedarRaw {
+		// Output format: raw H.264 over pipe for the lowest-latency VLC path.
+		args = append(args,
+			"-f", "h264",
+			"pipe:1",
+		)
+	} else {
+		// Output format: MPEG-TS over pipe
+		args = append(args,
+			"-f", "mpegts",
+			"-fflags", "nobuffer",
+			"-flush_packets", "1",
+			"-muxdelay", "0",
+			"-muxpreload", "0",
+			"-max_interleave_delta", "0",
+			"-mpegts_flags", "resend_headers+initial_discontinuity",
+			"pipe:1",
+		)
+	}
 
 	return args
 }

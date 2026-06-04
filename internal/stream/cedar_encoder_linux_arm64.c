@@ -25,6 +25,9 @@ typedef struct {
     unsigned int   bitrate_kbps;
     uintptr_t      writer_handle;   /* cgo.Handle value; passed to cedar_write_go */
     int            bpp;             /* framebuffer bits-per-pixel (16 or 32) */
+    unsigned int   input_buffers;   /* vendor input-buffer pool size (0 = default) */
+    unsigned int   max_frames;      /* stop after N encoded frames (0 = unlimited) */
+    int            synthetic;       /* 1 = synthesize input instead of reading /dev/fb0 */
 } cedar_cfg_t;
 
 /* Go callback — defined in cedar_encoder.go with //export */
@@ -166,7 +169,7 @@ static fn_GetOpsS                    p_MemAdapterGetOpsS;
 static fn_SetParameter               p_VideoEncSetParameter;
 static fn_GetParameter               p_VideoEncGetParameter;
 
-#define LOG(fmt, ...) fprintf(stderr, "[cedar_encoder] " fmt "\n", ##__VA_ARGS__)
+#define LOG(fmt, ...) do { fprintf(stderr, "[cedar_encoder] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while (0)
 
 #define LOADSYM(lib, var, name) do { \
     *(void **)(&(var)) = dlsym((lib), (name)); \
@@ -293,7 +296,10 @@ static void deadline_advance(struct timespec *ts, long frame_ns)
 
 int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
 {
-    LOG("cedar_run entered w=%u h=%u bpp=%d fps=%u", cfg->width, cfg->height, cfg->bpp, cfg->fps);
+    int input_buffers = cfg->input_buffers ? (int)cfg->input_buffers : 1;
+    int max_frames = (int)cfg->max_frames;
+    int synthetic = cfg->synthetic;
+    LOG("cedar_run entered w=%u h=%u bpp=%d fps=%u buffers=%d max_frames=%d", cfg->width, cfg->height, cfg->bpp, cfg->fps, input_buffers, max_frames);
     int ret        = -1;
     int enc_init   = 0;
     int buf_alloc  = 0;
@@ -360,7 +366,7 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     {
         VencBaseConfig bcfg;
         memset(&bcfg, 0, sizeof bcfg);
-        bcfg.bEncH264Nalu  = 0;   /* raw NAL output; library prepends 4-byte length prefix (AVCC-style) */
+        bcfg.bEncH264Nalu  = 1;   /* use encoder's native Annex-B output */
         bcfg.nInputWidth   = w;
         bcfg.nInputHeight  = h;
         bcfg.nDstWidth     = w;
@@ -390,7 +396,7 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     {
         VencAllocateBufferParam bp;
         memset(&bp, 0, sizeof bp);
-        bp.nBufferNum = 1;
+        bp.nBufferNum = (unsigned int)input_buffers;
         bp.nSizeY     = w * h;
         bp.nSizeC     = w * h / 2;
         if (p_AllocInputBuffer(enc, &bp) != 0) { LOG("AllocInputBuffer FAIL"); goto done; }
@@ -428,35 +434,66 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
     LOG("entering encode loop frame_ns=%ld", frame_ns);
 
     int frame_count = 0;
-    while (!*stop_flag) {
+    while (!*stop_flag && (max_frames <= 0 || frame_count < max_frames)) {
         /* Capture framebuffer frame, reading from the currently-displayed page.
          * Double-buffered displays pan yoffset to flip; offset 0 is stale. */
-        if (ioctl(fb_fd, FBIOGET_VSCREENINFO, &fb_vinfo) < 0)
-            fb_vinfo.yoffset = 0;
-        off_t fb_off = (off_t)fb_vinfo.yoffset * w * (cfg->bpp / 8);
-        ssize_t n = pread(fb_fd, fb_buf, fb_size, fb_off);
-        if (n != (ssize_t)fb_size) {
-            LOG("pread fb0: expected %zu got %zd offset %lld", fb_size, n, (long long)fb_off);
-            goto done;
-        }
-        if (frame_count == 0) {
-            LOG("frame0 fb_off=%lld yoffset=%u first8: %02x%02x%02x%02x %02x%02x%02x%02x",
-                (long long)fb_off, fb_vinfo.yoffset,
-                fb_buf[0], fb_buf[1], fb_buf[2], fb_buf[3],
-                fb_buf[4], fb_buf[5], fb_buf[6], fb_buf[7]);
-        }
-
-        /* Convert framebuffer to NV12 in Cedar input buffer */
-        if (cfg->bpp == 16) {
-            rgb565_to_nv12((const uint16_t *)fb_buf,
-                           inbuf->_virY, inbuf->_virUV, w, h);
+        if (synthetic) {
+            if (frame_count == 0) {
+                LOG("frame0 synthetic fill: w=%u h=%u bpp=%d", w, h, cfg->bpp);
+            }
+            unsigned int phase = (unsigned int)(frame_count * 31u);
+            if (cfg->bpp == 16) {
+                uint16_t *pix = (uint16_t *)fb_buf;
+                for (unsigned int row = 0; row < h; row++) {
+                    for (unsigned int col = 0; col < w; col++) {
+                        unsigned int tile = (((row + phase) / 16) + ((col + phase) / 16)) & 1;
+                        pix[row * w + col] = tile ? 0xffff : 0x001f; /* white/blue checker */
+                    }
+                }
+                rgb565_to_nv12((const uint16_t *)fb_buf, inbuf->_virY, inbuf->_virUV, w, h);
+            } else {
+                for (unsigned int row = 0; row < h; row++) {
+                    for (unsigned int col = 0; col < w; col++) {
+                        size_t i = ((size_t)row * w + col) * 4;
+                        unsigned int tile = (((row + phase) / 16) + ((col + phase) / 16)) & 1;
+                        fb_buf[i + 0] = tile ? 0x20 : 0xf0; /* B */
+                        fb_buf[i + 1] = (unsigned char)(((col + phase) * 255u) / (w ? w : 1)); /* G gradient */
+                        fb_buf[i + 2] = tile ? 0xe0 : 0x10; /* R */
+                        fb_buf[i + 3] = 0xff; /* A */
+                    }
+                }
+                bgra_to_nv12(fb_buf, inbuf->_virY, inbuf->_virUV, w, h);
+            }
         } else {
-            bgra_to_nv12(fb_buf, inbuf->_virY, inbuf->_virUV, w, h);
+            if (ioctl(fb_fd, FBIOGET_VSCREENINFO, &fb_vinfo) < 0)
+                fb_vinfo.yoffset = 0;
+            off_t fb_off = (off_t)fb_vinfo.yoffset * w * (cfg->bpp / 8);
+            ssize_t n = pread(fb_fd, fb_buf, fb_size, fb_off);
+            if (n != (ssize_t)fb_size) {
+                LOG("pread fb0: expected %zu got %zd offset %lld", fb_size, n, (long long)fb_off);
+                goto done;
+            }
+            if (frame_count == 0) {
+                LOG("frame0 fb_off=%lld yoffset=%u first8: %02x%02x%02x%02x %02x%02x%02x%02x",
+                    (long long)fb_off, fb_vinfo.yoffset,
+                    fb_buf[0], fb_buf[1], fb_buf[2], fb_buf[3],
+                    fb_buf[4], fb_buf[5], fb_buf[6], fb_buf[7]);
+            }
+
+            /* Convert framebuffer to NV12 in Cedar input buffer */
+            if (cfg->bpp == 16) {
+                rgb565_to_nv12((const uint16_t *)fb_buf,
+                               inbuf->_virY, inbuf->_virUV, w, h);
+            } else {
+                bgra_to_nv12(fb_buf, inbuf->_virY, inbuf->_virUV, w, h);
+            }
         }
 
         inbuf->bIsFirstFrame = first_frame;
-        inbuf->nPts          = 0;
-        first_frame          = 0;
+        inbuf->bLastFrame    = (max_frames > 0 && frame_count + 1 >= max_frames) ? 1 : 0;
+        inbuf->nPts          = (long long)frame_count * (1000000LL / (long long)cfg->fps);
+        inbuf->nDuration      = 1000000LL / (long long)cfg->fps;
+        first_frame           = 0;
 
         p_FlushCacheAllocInputBuffer(enc, inbuf);
 
@@ -474,27 +511,54 @@ int cedar_run(cedar_cfg_t *cfg, volatile int *stop_flag)
         while (p_ValidBitstreamFrameNum(enc) > 0) {
             memset(outbuf, 0, 512);
             if (p_GetOneBitstreamFrame(enc, outbuf) != 0) break;
-            if ((frame_count == 0 || frame_count == 1) && outbuf->pData0 && outbuf->nSize0 >= 5) {
-                unsigned int show = outbuf->nSize0 < 32 ? outbuf->nSize0 : 32;
-                LOG("frame[%d]: key=%d sz0=%u nal=0x%02x bytes[0..%u]:",
-                    frame_count, outbuf->bIsKeyFrame, outbuf->nSize0,
-                    outbuf->pData0[4] & 0x1f, show - 1);
-                for (unsigned int _i = 0; _i < show; _i++)
-                    fprintf(stderr, " %02x", outbuf->pData0[_i]);
-                fprintf(stderr, "\n");
+            if (frame_count < 5 || frame_count % 15 == 0) {
+                LOG("frame[%d]: key=%d total=%u n0=%u n1=%u p0=%p p1=%p",
+                    frame_count, outbuf->bIsKeyFrame, outbuf->nTotalSize,
+                    outbuf->nSize0, outbuf->nSize1, outbuf->pData0, outbuf->pData1);
             }
-            /* CedarC prepends a 4-byte big-endian length prefix to each NAL unit
-             * (AVCC-style). Replace it with an Annex B start code (00 00 00 01)
-             * so ffmpeg's -f h264 parser can consume the stream. */
-            if (outbuf->pData0 && outbuf->nSize0 > 4) {
-                static const uint8_t sc[4] = {0x00, 0x00, 0x00, 0x01};
-                cedar_write_go(cfg->writer_handle, sc, 4);
-                cedar_write_go(cfg->writer_handle, outbuf->pData0 + 4, (int)(outbuf->nSize0 - 4));
-            } else if (outbuf->pData0 && outbuf->nSize0 > 0) {
-                cedar_write_go(cfg->writer_handle, outbuf->pData0, (int)outbuf->nSize0);
+            /* CedarC output may wrap across pData0/pData1. Reassemble the full
+             * bitstream into a contiguous buffer before normalizing AVCC vs
+             * Annex B. This avoids corrupting frames once the ring buffer wraps. */
+            if (outbuf->pData0 && outbuf->nTotalSize > 0) {
+                const unsigned int s0 = outbuf->nSize0;
+                const unsigned int s1 = outbuf->nSize1;
+                unsigned char *frame = NULL;
+                const unsigned char *d = outbuf->pData0;
+                size_t len = outbuf->nTotalSize;
+                if (outbuf->pData1 && s1 > 0) {
+                    frame = (unsigned char *)malloc(len);
+                    if (frame) {
+                        size_t n0 = s0;
+                        size_t n1 = s1;
+                        if (n0 > len) n0 = len;
+                        if (n0 + n1 > len) n1 = len > n0 ? len - n0 : 0;
+                        memcpy(frame, outbuf->pData0, n0);
+                        memcpy(frame + n0, outbuf->pData1, n1);
+                        d = frame;
+                    } else {
+                        LOG("warning: malloc failed for wrapped bitstream len=%zu; falling back to pData0 only", len);
+                    }
+                }
+                if (d) {
+                    if (len >= 4 && d[0] == 0x00 && d[1] == 0x00 && d[2] == 0x00 && d[3] == 0x01) {
+                        cedar_write_go(cfg->writer_handle, d, (int)len);
+                    } else {
+                        static const uint8_t sc[4] = {0x00, 0x00, 0x00, 0x01};
+                        size_t off = 0;
+                        while (off + 4 <= len) {
+                            unsigned int nal = ((unsigned int)d[off]   << 24) |
+                                               ((unsigned int)d[off+1] << 16) |
+                                               ((unsigned int)d[off+2] <<  8) |
+                                                (unsigned int)d[off+3];
+                            if (nal == 0 || off + 4 + nal > len) break;
+                            cedar_write_go(cfg->writer_handle, sc, 4);
+                            cedar_write_go(cfg->writer_handle, d + off + 4, (int)nal);
+                            off += 4 + nal;
+                        }
+                    }
+                }
+                free(frame);
             }
-            if (outbuf->pData1 && outbuf->nSize1 > 0)
-                cedar_write_go(cfg->writer_handle, outbuf->pData1, (int)outbuf->nSize1);
             p_FreeOneBitStreamFrame(enc, outbuf);
         }
 

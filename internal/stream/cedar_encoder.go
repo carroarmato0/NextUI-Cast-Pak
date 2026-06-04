@@ -175,7 +175,8 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 		if rtpHost == "" {
 			rtpHost = "239.255.0.1"
 		}
-		rtpTarget := fmt.Sprintf("rtp://%s:5004?ttl=1&pkt_size=1200", rtpHost)
+		pktSize := "1400"
+		rtpTarget := fmt.Sprintf("rtp://%s:5004?ttl=1&pkt_size=%s", rtpHost, pktSize)
 		sdp := buildRTPSDP(e.preset.SPSPPS, rtpHost)
 		logger.Info("cedar: entering RTP branch target=%s", rtpTarget)
 		if _, err := w.Write([]byte(sdp)); err != nil {
@@ -196,7 +197,7 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			"-c:v", "copy",
 			"-an",
 			"-f", "rtp",
-			"-pkt_size", "1200",
+			"-pkt_size", pktSize,
 			rtpTarget,
 		)
 		cmd.Stdin = pr

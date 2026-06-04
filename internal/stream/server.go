@@ -124,12 +124,19 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := "video/mp2t"
+	if ct, ok := encoder.(ContentTyper); ok {
+		contentType = ct.ContentType()
+	}
+	if strings.HasSuffix(r.URL.Path, ".ts") && contentType == "application/sdp" {
+		http.Redirect(w, r, "/stream.sdp", http.StatusTemporaryRedirect)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, ".sdp") {
 		contentType = "application/sdp"
 	} else if strings.HasSuffix(r.URL.Path, ".mp4") {
 		contentType = "video/mp4"
-	} else if ct, ok := encoder.(ContentTyper); ok {
-		contentType = ct.ContentType()
+	} else if contentType == "application/sdp" {
+		contentType = "video/mp2t"
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Connection", "keep-alive")
@@ -157,6 +164,13 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 	s.cmdMu.Unlock()
 
 	if strings.HasSuffix(r.URL.Path, ".sdp") {
+		if rtpt, ok := encoder.(interface{ SetRTPTarget(string) }); ok {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err == nil && host != "" {
+				rtpt.SetRTPTarget(host)
+			}
+		}
+
 		if err := encoder.Start(io.Discard); err != nil {
 			s.cmdMu.Lock()
 			if s.activeEncoder == encoder {

@@ -43,6 +43,7 @@ type cedarEncoder struct {
 	preset       CedarPreset
 	rawOutput    bool
 	rtpOutput    bool
+	rtpTarget    string
 	synthetic    bool
 	inputBuffers int
 	maxFrames    int
@@ -95,7 +96,7 @@ func NewCedarEncoder(cfg FFmpegConfig) (Encoder, error) {
 	}
 
 	sf := new(int32)
-	return &cedarEncoder{preset: p, rawOutput: cfg.CedarRaw, rtpOutput: cfg.CedarRTP, synthetic: cfg.CedarSynthetic, inputBuffers: inputBuffers, maxFrames: maxFrames, stopFlag: sf}, nil
+	return &cedarEncoder{preset: p, rawOutput: cfg.CedarRaw, rtpOutput: cfg.CedarRTP, synthetic: cfg.CedarSynthetic, inputBuffers: inputBuffers, maxFrames: maxFrames, stopFlag: sf, rtpTarget: "239.255.0.1"}, nil
 }
 
 func CedarAvailable() bool           { return C.cedar_probe() == 0 }
@@ -167,14 +168,22 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			return fmt.Errorf("cedar: os.Pipe: %w", err)
 		}
 
-		rtpTarget := "rtp://239.255.0.1:5004?ttl=1&pkt_size=1200"
-		sdp := buildRTPSDP(e.preset.SPSPPS)
+		rtpHost := e.rtpTarget
+		if rtpHost == "" {
+			rtpHost = "239.255.0.1"
+		}
+		rtpTarget := fmt.Sprintf("rtp://%s:5004?ttl=1&pkt_size=1200", rtpHost)
+		sdp := buildRTPSDP(e.preset.SPSPPS, rtpHost)
+		fmt.Fprintf(os.Stderr, "[cedar_encoder] RTP branch start target=%s sdp-bytes=%d\n", rtpTarget, len(sdp))
 		if _, err := w.Write([]byte(sdp)); err != nil {
+			_ = pr.Close()
+			_ = pw.Close()
 			return err
 		}
 		if fl, ok := w.(interface{ Flush() }); ok {
 			fl.Flush()
 		}
+
 		cmd := exec.Command("ffmpeg",
 			"-y",
 			"-r", strconv.Itoa(e.preset.FPS),
@@ -196,6 +205,7 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			_ = pw.Close()
 			return fmt.Errorf("cedar: rtp ffmpeg: %w", err)
 		}
+		fmt.Fprintf(os.Stderr, "[cedar_encoder] ffmpeg RTP started pid=%d target=%s\n", cmd.Process.Pid, rtpTarget)
 		_ = pr.Close()
 
 		e.mu.Lock()
@@ -209,7 +219,6 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			defer pw.Close()
 
 			var err error
-
 			cfg := C.cedar_cfg_t{
 				width:         C.uint(e.preset.Width),
 				height:        C.uint(e.preset.Height),
@@ -224,6 +233,7 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			}
 
 			rc := C.cedar_run(&cfg, (*C.int)(unsafe.Pointer(e.stopFlag)))
+			fmt.Fprintf(os.Stderr, "[cedar_encoder] cedar_run RTP returned rc=%d err=%v\n", rc, err)
 			if rc != 0 {
 				err = fmt.Errorf("cedar: encode loop exited with rc=%d", rc)
 			}
@@ -350,7 +360,7 @@ func (e *cedarEncoder) Wait() error {
 	return e.doneErr
 }
 
-func buildRTPSDP(spspps []byte) string {
+func buildRTPSDP(spspps []byte, rtpHost string) string {
 	const sc = "\x00\x00\x00\x01"
 	if len(spspps) == 0 {
 		return ""
@@ -370,27 +380,41 @@ func buildRTPSDP(spspps []byte) string {
 		return ""
 	}
 	profileLevel := fmt.Sprintf("%02X%02X%02X", sps[1], sps[2], sps[3])
+	if rtpHost == "" {
+		rtpHost = "239.255.0.1"
+	}
 	return fmt.Sprintf(
 		"v=0\r\n"+
 			"o=- 0 0 IN IP4 127.0.0.1\r\n"+
 			"s=TrimUI Cast\r\n"+
-			"c=IN IP4 239.255.0.1/1\r\n"+
+			"c=IN IP4 %s\r\n"+
 			"t=0 0\r\n"+
 			"a=tool:TrimUI Cast\r\n"+
 			"m=video 5004 RTP/AVP 96\r\n"+
 			"a=rtpmap:96 H264/90000\r\n"+
 			"a=fmtp:96 packetization-mode=1; sprop-parameter-sets=%s,%s; profile-level-id=%s\r\n",
+		rtpHost,
 		base64.StdEncoding.EncodeToString(sps),
 		base64.StdEncoding.EncodeToString(pps),
 		profileLevel,
 	)
 }
 
+func (e *cedarEncoder) SetRTPTarget(target string) {
+	if e == nil || !e.rtpOutput {
+		return
+	}
+	if target == "" {
+		return
+	}
+	e.rtpTarget = target
+}
+
 func (e *cedarEncoder) SDP() string {
 	if e == nil || !e.rtpOutput {
 		return ""
 	}
-	return buildRTPSDP(e.preset.SPSPPS)
+	return buildRTPSDP(e.preset.SPSPPS, e.rtpTarget)
 }
 
 // cedar_write_go is the CGO export called from C to write encoded bytes to the Go io.Writer.

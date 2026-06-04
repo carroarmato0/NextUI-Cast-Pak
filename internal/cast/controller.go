@@ -226,8 +226,8 @@ func (c *Controller) runServer(ctx context.Context) {
 		transport := normalizeTransport(c.cfg.Transport)
 		c.mu.RUnlock()
 
-		if transport == "h264" && quality != "ultra" {
-			quality = "ultra"
+		if transport == "rtp" && quality != "high" {
+			quality = "high"
 		}
 		alsaDev := ""
 		if audioEnabled {

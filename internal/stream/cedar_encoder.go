@@ -37,6 +37,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/carroarmato0/nextui-cast-pak/internal/logger"
 )
 
 type cedarEncoder struct {
@@ -118,6 +120,7 @@ func (e *cedarEncoder) ContentType() string {
 // be passed as an *os.File directly to cmd.Stdin — no copy goroutine needed.
 // Cedar writes Annex B frames to the pipe write end via cedar_write_go.
 func (e *cedarEncoder) Start(w io.Writer) error {
+	logger.Info("cedar: Start called raw=%t rtp=%t synthetic=%t", e.rawOutput, e.rtpOutput, e.synthetic)
 	atomic.StoreInt32(e.stopFlag, 0)
 	e.done = make(chan struct{})
 	e.doneOnce = sync.Once{}
@@ -174,7 +177,7 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 		}
 		rtpTarget := fmt.Sprintf("rtp://%s:5004?ttl=1&pkt_size=1200", rtpHost)
 		sdp := buildRTPSDP(e.preset.SPSPPS, rtpHost)
-		fmt.Fprintf(os.Stderr, "[cedar_encoder] RTP branch start target=%s sdp-bytes=%d\n", rtpTarget, len(sdp))
+		logger.Info("cedar: entering RTP branch target=%s", rtpTarget)
 		if _, err := w.Write([]byte(sdp)); err != nil {
 			_ = pr.Close()
 			_ = pw.Close()
@@ -205,8 +208,16 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			_ = pw.Close()
 			return fmt.Errorf("cedar: rtp ffmpeg: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "[cedar_encoder] ffmpeg RTP started pid=%d target=%s\n", cmd.Process.Pid, rtpTarget)
+		logger.Info("cedar: ffmpeg RTP started pid=%d target=%s", cmd.Process.Pid, rtpTarget)
 		_ = pr.Close()
+
+		if _, err := pw.Write(e.preset.SPSPPS); err != nil {
+			_ = pr.Close()
+			_ = pw.Close()
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return fmt.Errorf("cedar: write RTP SPS/PPS: %w", err)
+		}
 
 		e.mu.Lock()
 		e.muxCmd = cmd
@@ -233,7 +244,7 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 			}
 
 			rc := C.cedar_run(&cfg, (*C.int)(unsafe.Pointer(e.stopFlag)))
-			fmt.Fprintf(os.Stderr, "[cedar_encoder] cedar_run RTP returned rc=%d err=%v\n", rc, err)
+			logger.Info("cedar: cedar_run RTP returned rc=%d err=%v", rc, err)
 			if rc != 0 {
 				err = fmt.Errorf("cedar: encode loop exited with rc=%d", rc)
 			}

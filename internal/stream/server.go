@@ -164,6 +164,7 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 	s.cmdMu.Unlock()
 
 	if strings.HasSuffix(r.URL.Path, ".sdp") {
+		logger.Info("dms: SDP request from %s path=%s contentType=%s", r.RemoteAddr, r.URL.Path, contentType)
 		if rtpt, ok := encoder.(interface{ SetRTPTarget(string) }); ok {
 			host, _, err := net.SplitHostPort(r.RemoteAddr)
 			if err == nil && host != "" {
@@ -171,6 +172,7 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		logger.Info("dms: starting SDP encoder for %s", r.RemoteAddr)
 		if err := encoder.Start(io.Discard); err != nil {
 			s.cmdMu.Lock()
 			if s.activeEncoder == encoder {
@@ -182,6 +184,7 @@ func (s *StreamServer) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		logger.Info("dms: SDP encoder started for %s", r.RemoteAddr)
 		if sp, ok := encoder.(interface{ SDP() string }); ok {
 			if _, err := io.WriteString(w, sp.SDP()); err != nil {
 				logger.Error("dms: failed to write SDP manifest: %v", err)

@@ -175,7 +175,9 @@ func (e *cedarEncoder) Start(w io.Writer) error {
 		if rtpHost == "" {
 			rtpHost = "239.255.0.1"
 		}
-		pktSize := "1400"
+		// Wi‑Fi is the primary link, so keep RTP packets conservative to avoid
+		// fragmentation and retransmit bursts on wireless links.
+		pktSize := "1200"
 		rtpTarget := fmt.Sprintf("rtp://%s:5004?ttl=1&pkt_size=%s", rtpHost, pktSize)
 		sdp := buildRTPSDP(e.preset.SPSPPS, rtpHost)
 		logger.Info("cedar: entering RTP branch target=%s", rtpTarget)
